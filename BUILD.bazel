@@ -40,7 +40,7 @@ load(
     "workers_tsc_test",
     "workers_vitest_test",
 )
-load("@tbhb_rules_go//:defs.bzl", "go_arch_lint_test", "go_deadcode_test", "go_mod_tidy_test", "gobco_test", "gomutants_test", "govulncheck_test")
+load("@tbhb_rules_go//:defs.bzl", "go_arch_lint_test", "go_deadcode_test", "go_mod_tidy_test", "gobco_test", "gomutants_test", "govulncheck", "govulncheck_test")
 load("@tbhb_rules_typescript//:defs.bzl", "biome_test", "depcruise_test")
 load("//:vale_packages.bzl", "VALE_PACKAGES")
 load("//tools/lint:linters.bzl", "golangci_lint_test")
@@ -158,6 +158,16 @@ go_mod_tidy_test(
 # network, so the test is manual and outside `//...`; run it by name.
 govulncheck_test(
     name = "govulncheck_test",
+    srcs = GO_TARGETS,
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    proxy = "@go_mod_proxy//:proxy",
+)
+
+# The `bazel run` companion of the same scan, which CI runs, keeping
+# its report as an artifact.
+govulncheck(
+    name = "govulncheck",
     srcs = GO_TARGETS,
     go_mod = "go.mod",
     go_sum = "go.sum",
