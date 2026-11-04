@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -88,6 +89,7 @@ type mcpRun struct {
 	out    *lockedBuffer
 	errOut *lockedBuffer
 	done   chan error
+	cancel context.CancelFunc
 }
 
 // startMCP runs the server command on stdin with the given getenv and relay
@@ -100,14 +102,21 @@ func startMCP(
 	root := &cobra.Command{Use: "awrel", SilenceUsage: true}
 	root.AddCommand(newMCPCmdWithTimeout(stdin, getenv, timeout))
 
-	running := &mcpRun{in: nil, out: newLockedBuffer(), errOut: newLockedBuffer(), done: make(chan error, 1)}
+	ctx, cancel := context.WithCancel(t.Context())
+	running := &mcpRun{
+		in:     nil,
+		out:    newLockedBuffer(),
+		errOut: newLockedBuffer(),
+		done:   make(chan error, 1),
+		cancel: cancel,
+	}
 
 	root.SetArgs(append([]string{"mcp"}, args...))
 	root.SetOut(running.out)
 	root.SetErr(running.errOut)
 
 	go func() {
-		err := root.ExecuteContext(t.Context())
+		err := root.ExecuteContext(ctx)
 
 		// A command that has stopped reading would block the test's writes to
 		// a pipe forever. Closing the reader makes them fail.
@@ -499,6 +508,22 @@ func TestReadFailureExitsWithError(t *testing.T) {
 
 	err := running.finish(t)
 	if !errors.Is(err, errStdin) || !strings.Contains(err.Error(), "serve MCP: ") {
+		t.Errorf("exit: %v", err)
+	}
+}
+
+// TestCancelStopsTheServerCleanly cancels the command's context while the
+// input is still open. Serve can then stop only by returning context.Canceled,
+// which isn't an error. The signal test covers this too, but it skips Windows.
+func TestCancelStopsTheServerCleanly(t *testing.T) {
+	t.Parallel()
+
+	running := startSession(t, env(nil), 0)
+	running.handshake(t)
+	running.cancel()
+
+	err := running.finish(t)
+	if err != nil {
 		t.Errorf("exit: %v", err)
 	}
 }
