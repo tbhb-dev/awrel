@@ -61,6 +61,7 @@ gomutants
 goproxy
 gosec
 govet
+govulncheck
 gpgsign
 hardwrap
 heapdump
