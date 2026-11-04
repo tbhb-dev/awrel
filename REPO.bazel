@@ -2,10 +2,10 @@
 # Copyright Tony Burns
 
 # Directories that hold no source of this repository: VCS metadata, Python
-# environments, tool caches (wrangler's too), agent worktrees, mutation output
-# and scratch
-# work. Ignoring them keeps them out of every package and every glob, so the
-# whole-tree checks (//:repo_files) never scan them.
+# environments, tool caches (wrangler's too), agent worktrees, mutation output,
+# scratch work and Obsidian's vault settings. Ignoring them keeps them out of
+# every package and every glob, so the whole-tree checks (//:repo_files) never
+# scan them.
 ignore_directories([
     ".git",
     "bazel-*",
@@ -22,4 +22,5 @@ ignore_directories([
     "node_modules",
     ".wrangler",
     "mutants",
+    ".obsidian",
 ])
