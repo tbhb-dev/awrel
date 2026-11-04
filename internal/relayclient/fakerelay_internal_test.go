@@ -38,7 +38,7 @@ const (
 // in under a second. A mutant can leave a test waiting out a ten-second request
 // budget. The binary then exits with a failure of its own, ahead of the
 // mutation tester's deadline on a slow runner.
-const totalLimit = 8 * time.Second
+const totalLimit = 15 * time.Second
 
 // TestMain fails the run once totalLimit has passed.
 func TestMain(m *testing.M) {

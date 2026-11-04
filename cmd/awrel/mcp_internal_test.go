@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -317,6 +318,18 @@ func TestResolveToken(t *testing.T) {
 	}
 }
 
+// quoted returns text as it appears inside a JSON string.
+func quoted(t *testing.T, text string) string {
+	t.Helper()
+
+	encoded, err := json.Marshal(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return strings.Trim(string(encoded), `"`)
+}
+
 // osReason is the operating system's own wording for why path can't be read.
 // Each system words it differently.
 func osReason(t *testing.T, path string) string {
@@ -409,8 +422,12 @@ func TestUnreadableTokenFileFailsEveryTool(t *testing.T) {
 	running := startSession(t, env(map[string]string{tokenFileEnv: path}), 0)
 	out := running.askAll(t)
 
-	want := "not connected to the relay: AWREL_CONNECT_TOKEN_FILE " + path + ": " + osReason(t, path)
-	if strings.Count(out, want) != 3 || !strings.Contains(running.errOut.String(), path) {
+	// Stdout is JSON and stderr is a quoted log value. Both double the
+	// backslashes of a Windows path.
+	want := quoted(t, "not connected to the relay: AWREL_CONNECT_TOKEN_FILE "+path+": "+osReason(t, path))
+	logged := strings.Trim(strconv.Quote(path), `"`)
+
+	if strings.Count(out, want) != 3 || !strings.Contains(running.errOut.String(), logged) {
 		t.Errorf("stdout:\n%s\nstderr:\n%s", out, running.errOut.String())
 	}
 
