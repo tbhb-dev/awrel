@@ -2,8 +2,8 @@
 # the bundled dictionaries lack. Add only real terms; fix typos instead.
 addopts
 ascm
-awrel
 autouse
+awrel
 bazelignore
 bazelisk
 bazelrc
@@ -26,6 +26,7 @@ cuda
 cyclop
 deadcode
 delenv
+depcruise
 depguard
 direnv
 docstrings
@@ -67,6 +68,7 @@ importlinter
 importpath
 inconshreveable
 keepends
+knip
 listy
 LLMX
 localmodule
@@ -143,6 +145,8 @@ unstampable
 unvalidated
 usefixtures
 usetesting
+vitest
+workerd
 worktrees
 xdist
 xgenerated

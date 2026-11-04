@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Tony Burns
+
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_test")
+load("@tbhb_rules//repo:defs.bzl", "repo_files")
+
+repo_files()
+
+# The deploys' pre- and post-deploy check against a deployed Worker.
+js_binary(
+    name = "check",
+    entry_point = "check.mjs",
+    tags = ["worker"],
+    visibility = ["//:__pkg__"],
+)
+
+js_test(
+    name = "check_test",
+    data = ["check.mjs"],
+    entry_point = "check_test.mjs",
+    tags = ["worker"],
+)

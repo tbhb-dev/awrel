@@ -5,6 +5,7 @@ load("@bazel_env.bzl", "bazel_env")
 load("@bazelrc-preset.bzl", "bazelrc_preset")
 load("@buildifier_prebuilt//:rules.bzl", "buildifier", "buildifier_test")
 load("@gazelle//:def.bzl", "gazelle")
+load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@rules_go//go:def.bzl", "nogo")
 load("@tbhb_rules//format:defs.bzl", "format", "format_test")
 load(
@@ -28,7 +29,18 @@ load(
     "zizmor_test",
 )
 load("@tbhb_rules//repo:defs.bzl", "repo_files")
+load(
+    "@tbhb_rules_cloudflare//:defs.bzl",
+    "worker_deploy",
+    "worker_types_test",
+    "workers_eslint_test",
+    "workers_knip_test",
+    "workers_stryker_test",
+    "workers_tsc_test",
+    "workers_vitest_test",
+)
 load("@tbhb_rules_go//:defs.bzl", "go_arch_lint_test", "go_deadcode_test", "go_mod_tidy_test", "gomutants_test")
+load("@tbhb_rules_typescript//:defs.bzl", "biome_test", "depcruise_test")
 load("//:vale_packages.bzl", "VALE_PACKAGES")
 load("//tools/lint:linters.bzl", "golangci_lint_test")
 
@@ -187,6 +199,115 @@ repo_files(
         ".vale/ai-tells-experimental/**",
         ".vale/config/scripts/**",
         ".vale/config/templates/**",
+    ],
+)
+
+# The Worker's own npm packages, which the TypeScript checks read.
+npm_link_all_packages(name = "node_modules")
+
+# The Worker project: its sources, tests and tool configs. Every Worker
+# target carries the "worker" tag: the Worker runs on Cloudflare's
+# Linux-based runtime, so CI tests it on Linux only and skips the tag on the
+# other operating systems.
+WORKER = glob(["src/**"]) + [
+    ".dependency-cruiser.cjs",
+    "biome.json",
+    "eslint.config.mjs",
+    "knip.json",
+    "package.json",
+    "pnpm-workspace.yaml",
+    "stryker.config.mjs",
+    "tsconfig.json",
+    "vitest.config.mjs",
+    "worker-configuration.d.ts",
+    "wrangler.jsonc",
+]
+
+# The committed `Env` and runtime types, exactly what the pinned wrangler
+# writes; `bazel run //:worker_types_test.update` regenerates them.
+worker_types_test(
+    name = "worker_types_test",
+    srcs = WORKER,
+    tags = ["worker"],
+)
+
+# `bazel run //:deploy_stg` (then prd) deploys the Worker and its Durable
+# Object migrations: the new version runs //e2e:check at 0% through the
+# version override, then again on the live URL after it takes all traffic.
+# The workflow supplies the Cloudflare credentials from 1Password; the Worker
+# has no secrets yet. Each environment's first deploy is a manual bootstrap.
+worker_deploy(
+    name = "deploy_stg",
+    srcs = WORKER,
+    env = "stg",
+    post_deploy = ["//e2e:check"],
+    pre_deploy = ["//e2e:check"],
+    tags = ["worker"],
+    url = "https://awrel-stg.tbhb.dev",
+)
+
+worker_deploy(
+    name = "deploy_prd",
+    srcs = WORKER,
+    env = "prd",
+    post_deploy = ["//e2e:check"],
+    pre_deploy = ["//e2e:check"],
+    tags = ["worker"],
+    url = "https://awrel.tbhb.dev",
+)
+
+# The TypeScript gates, each over a copy of the Worker project with its
+# node_modules linked in. The type checks, the linters that read types and
+# the tests use the workerd variants from tbhb_rules_cloudflare: the tests
+# run inside workerd, where the Durable Object runs.
+workers_tsc_test(
+    name = "tsc_test",
+    srcs = WORKER,
+    node_modules = [":node_modules"],
+    tags = ["worker"],
+)
+
+biome_test(
+    name = "biome_test",
+    srcs = WORKER,
+    tags = ["worker"],
+)
+
+workers_eslint_test(
+    name = "eslint_test",
+    srcs = WORKER,
+    node_modules = [":node_modules"],
+    tags = ["worker"],
+)
+
+workers_knip_test(
+    name = "knip_test",
+    srcs = WORKER,
+    node_modules = [":node_modules"],
+    tags = ["worker"],
+)
+
+depcruise_test(
+    name = "depcruise_test",
+    srcs = WORKER,
+    node_modules = [":node_modules"],
+    tags = ["worker"],
+)
+
+workers_vitest_test(
+    name = "vitest_test",
+    srcs = WORKER,
+    node_modules = [":node_modules"],
+    tags = ["worker"],
+)
+
+workers_stryker_test(
+    name = "stryker_test",
+    srcs = WORKER,
+    node_modules = [":node_modules"],
+    tags = [
+        "cpu:1",
+        "worker",
     ],
 )
 

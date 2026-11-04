@@ -12,6 +12,10 @@ bazelisk test //...
 
 `bazelisk run //:format` formats the tree in place, and `bazelisk run //:bazel_env` builds the shims for the pinned tools in `.bazel_env/bin`. Docs are in [docs/](docs/index.md).
 
+## Worker
+
+The Worker and its Durable Object are in `src/`, configured by `wrangler.jsonc`, and their tests run inside `workerd`, the Workers runtime. After a change to `wrangler.jsonc`, `bazelisk run //:worker_types_test.update` regenerates `worker-configuration.d.ts`. Every push to main deploys to `awrel-stg`, then `awrel-prd`, after the first manual deploy of each environment.
+
 ## License
 
 Apache-2.0. See `LICENSE`.

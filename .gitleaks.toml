@@ -21,4 +21,5 @@ paths = [
   '''^\.worktrees/''',
   '''(^|/)__pycache__/''',
   '''^\.(ruff|pytest|hypothesis|rumdl)_cache/''',
+  '''^mutants/''',
 ]

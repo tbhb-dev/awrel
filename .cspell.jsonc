@@ -11,9 +11,11 @@
     "LICENSE",
     "MODULE.bazel.lock",
     "mise.lock",
+    "pnpm-lock.yaml",
     "tmp/**/*",
     "tools/testdata/**/*",
-    "uv.lock"
+    "uv.lock",
+    "worker-configuration.d.ts"
   ],
   "dictionaryDefinitions": [
     {

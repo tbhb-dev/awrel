@@ -1,0 +1,16 @@
+{
+  "entry": ["src/index.ts"],
+  "project": ["src/**/*.ts"],
+  "ignoreDependencies": [
+    "cloudflare",
+    "@cloudflare/vitest-plugin",
+    "@vitest/coverage-istanbul",
+    "vitest"
+  ],
+  "typescript": {
+    "config": ["tsconfig.json"]
+  },
+  "vitest": {
+    "config": ["vitest.config.mjs"]
+  }
+}

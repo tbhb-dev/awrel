@@ -37,3 +37,9 @@ indent_size = 2
 [*.md]
 trim_trailing_whitespace = false
 max_line_length = off
+
+# wrangler types output (tbhb_rules_cloudflare), which worker_types_test
+# compares with a fresh run byte for byte: tabs and trailing spaces included.
+[worker-configuration.d.ts]
+trim_trailing_whitespace = false
+indent_style = unset

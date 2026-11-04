@@ -13,7 +13,15 @@ default_stages: [pre-commit]
 # Never touch Vale's synced style packages, build output, scratch work, agent
 # worktrees, or test fixtures (failure-proof fixtures are
 # deliberately malformed).
-exclude: ^(\.vale/(Google|write-good|proselint|ai-tells.*)/|bazel-.*/|tmp/|\.worktrees/|(.*/)?testdata/)
+exclude: |
+  (?x)^(
+    \.vale/(Google|write-good|proselint|ai-tells.*)/
+    | bazel-.*/
+    | tmp/
+    | \.worktrees/
+    | (.*/)?testdata/
+    | worker-configuration\.d\.ts$
+  )
 
 repos:
   - repo: builtin

@@ -1,0 +1,6 @@
+{
+  "name": "awrel",
+  "private": true,
+  "type": "module",
+  "description": "awrel's Cloudflare Worker and Durable Object. The tools (TypeScript, Biome, ESLint, Vitest, Stryker) come from tbhb_rules_typescript, and wrangler and the workerd test pool from tbhb_rules_cloudflare, not from here."
+}

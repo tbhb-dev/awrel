@@ -4,6 +4,7 @@
     "^\\.mise/",
     "^\\.vale/(Google|write-good|proselint|ai-tells.*)/",
     "^\\.venv/",
-    "^tmp/"
+    "^tmp/",
+    "^worker-configuration\\.d\\.ts$"
   ]
 }
