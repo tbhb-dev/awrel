@@ -18,6 +18,7 @@ toml-version = "v1.0.0"
 exclude = [
   ".venv/**/*.toml",
   "tmp/**/*.toml",
+  ".bazel-*/**/*.toml",
   "bazel-*/**/*.toml",
   # Test fixtures, some deliberately malformed for failure proofs.
   "**/testdata/**/*.toml",

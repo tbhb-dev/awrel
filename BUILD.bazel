@@ -64,13 +64,14 @@ bazelrc_preset(
 # buildifier: `//:buildifier` formats and applies lint fixes in place,
 # `//:buildifier.check` fails on any formatting or lint difference, and the
 # test below makes `bazel test //...` fail on the same findings. Every
-# available warning is on. `bazel-*` convenience symlinks, the Python and
-# tool caches and scratch space hold no Starlark that this
-# repository owns.
+# available warning is on. `.bazel-*` and `bazel-*` convenience symlinks, the
+# Python and tool caches and scratch space hold no Starlark that this repository
+# owns.
 BUILDIFIER_EXCLUDES = [
     "./.git/*",
     "./.venv/*",
     "./.mise/*",
+    "./.bazel-*",
     "./bazel-*",
     "./node_modules/*",
     "./tmp/*",

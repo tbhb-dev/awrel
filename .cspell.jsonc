@@ -5,6 +5,7 @@
     ".rumdl_cache/**/*",
     ".vale/**/*",
     ".venv/**/*",
+    ".bazel-*/**/*",
     "bazel-*/**/*",
     "coverage.xml",
     "go.sum",

@@ -143,8 +143,10 @@ jobs:
         with:
           name: testlogs-${{ matrix.os }}
           path: |
-            bazel-testlogs/**/test.log
-            bazel-testlogs/**/test.xml
+            .bazel-testlogs/**/test.log
+            .bazel-testlogs/**/test.xml
+          # upload-artifact skips dot-prefixed paths otherwise.
+          include-hidden-files: true
           if-no-files-found: ignore
 
   # The repository-level checks, on Linux beside the bazel matrix, so they

@@ -2,6 +2,10 @@ tmp/
 .worktrees/
 bin/
 dist/
+# Bazel convenience symlinks (--symlink_prefix=.bazel-); the old bazel-*
+# names stay for one transition, since clones that built before the prefix
+# change still have them.
+.bazel-*
 bazel-*
 .bazelrc.user
 # bazel_env's symlink into the output tree (bazel run //:bazel_env).
