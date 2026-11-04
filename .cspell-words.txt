@@ -36,6 +36,7 @@ esac
 execpath
 exhaustruct
 extensionless
+extractability
 filegroup
 findstr
 flatmap
@@ -62,6 +63,7 @@ hardwrap
 heapdump
 heredocs
 hermeticity
+hibernatable
 HKLM
 hprof
 importlinter
@@ -77,6 +79,7 @@ mapfile
 mapliteral
 mdfile
 mdir
+miniflare
 msgfile
 mutmut
 nakedret
