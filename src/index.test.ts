@@ -38,7 +38,7 @@ it("routes a GitHub webhook to the receiver", async () => {
       body,
       headers: {
         "X-Hub-Signature-256": await sign(body),
-        "X-GitHub-Event": "ping",
+        "X-GitHub-Event": "push",
         "X-GitHub-Delivery": "d-1",
       },
     },
