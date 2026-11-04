@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Tony Burns
+
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  // The presets track tbhb-dev/renovate-config's main branch, pinned by
+  // commit; Renovate bumps the pins (the "renovate-config" group).
+  extends: [
+    "github>tbhb-dev/renovate-config//default.json5#be8df0fb4a3281cef1fcfc27f868a769aafa060e", // main
+    "github>tbhb-dev/renovate-config//bazel.json5#be8df0fb4a3281cef1fcfc27f868a769aafa060e", // main
+    "github>tbhb-dev/renovate-config//go.json5#be8df0fb4a3281cef1fcfc27f868a769aafa060e", // main
+    "github>tbhb-dev/renovate-config//python.json5#be8df0fb4a3281cef1fcfc27f868a769aafa060e", // main
+  ],
+
+  // awrel needs nothing beyond the presets: its Go module, Bazel pins and uv
+  // lock are all covered there.
+}
