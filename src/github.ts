@@ -65,6 +65,12 @@ export async function receiveGitHub(
   if (event === null || delivery === null) {
     return new Response("Bad Request", { status: 400 });
   }
+  // GitHub sends a ping only to test a webhook's configuration, so agents get
+  // nothing from it. Answering it here also keeps a signed ping, which the
+  // deploy check sends, independent of the Durable Object's version.
+  if (event === "ping") {
+    return new Response(null, { status: 202 });
+  }
   await env.RELAY.getByName("default").publish({
     provider: "github",
     event,

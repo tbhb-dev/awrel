@@ -7,7 +7,9 @@
 // Every response must name WORKER_VERSION_ID in Awrel-Worker-Version, so a
 // check that reached the old version fails. Every request is a POST under
 // /webhooks/, the only paths the edge lets through. GITHUB_WEBHOOK_SECRET
-// signs the test delivery and is never printed.
+// signs the test delivery and is never printed. The Worker answers a signed
+// ping without calling the relay, so that case covers the signature path
+// only, not the relay.
 
 import { createHmac } from "node:crypto";
 

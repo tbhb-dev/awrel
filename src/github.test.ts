@@ -198,6 +198,23 @@ describe("relayed event", () => {
     expect(message?.payload).toEqual(JSON.parse(body) as unknown);
   });
 
+  it("answers a ping without relaying it", async () => {
+    const messages = await connect(relay(), {
+      subscriptions: [{ provider: "github" }],
+    });
+    const response = await post({ event: "ping" });
+    expect(response.status).toBe(202);
+    expect(await response.text()).toBe("");
+    await settle();
+    expect(messages).toEqual([]);
+  });
+
+  it("still validates a ping", async () => {
+    expect((await post({ event: "ping", signature: null })).status).toBe(401);
+    expect((await post({ event: "ping", body: "{" })).status).toBe(400);
+    expect((await post({ event: "ping", delivery: null })).status).toBe(400);
+  });
+
   it("reaches only the matching subscribers", async () => {
     const stub = relay();
     const hit = await connect(stub, {
