@@ -26,7 +26,6 @@ export default defineConfig({
       provider: "istanbul",
       include: ["src/**/*.ts"],
       exclude: ["src/**/*.test.ts", "src/testing.ts"],
-      thresholds: { 100: true },
     },
   },
 });

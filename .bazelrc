@@ -9,6 +9,10 @@ common --repo_env=DO_NOT_TRACK=1
 
 common --lockfile_mode=error
 
+# Dot-prefixed convenience symlinks (.bazel-bin, .bazel-testlogs, ...), so tools
+# that skip hidden files do not follow them into the output base.
+common --symlink_prefix=.bazel-
+
 # Fail when a bazel_dep version is lower than what the module graph resolves
 # to, so the declared minimums stay honest.
 common --check_direct_dependencies=error

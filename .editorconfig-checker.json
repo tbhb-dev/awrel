@@ -1,5 +1,6 @@
 {
   "Exclude": [
+    "^\\.bazel-",
     "^bazel-",
     "^\\.mise/",
     "^\\.vale/(Google|write-good|proselint|ai-tells.*)/",

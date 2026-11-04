@@ -40,7 +40,7 @@ load(
     "workers_tsc_test",
     "workers_vitest_test",
 )
-load("@tbhb_rules_go//:defs.bzl", "go_arch_lint_test", "go_deadcode_test", "go_mod_tidy_test", "gobco_test", "gomutants_test")
+load("@tbhb_rules_go//:defs.bzl", "go_arch_lint_test", "go_deadcode_test", "go_mod_tidy_test", "gobco_test", "gomutants_test", "govulncheck", "govulncheck_test")
 load("@tbhb_rules_typescript//:defs.bzl", "biome_test", "depcruise_test")
 load("//:vale_packages.bzl", "VALE_PACKAGES")
 load("//tools/lint:linters.bzl", "golangci_lint_test")
@@ -64,13 +64,14 @@ bazelrc_preset(
 # buildifier: `//:buildifier` formats and applies lint fixes in place,
 # `//:buildifier.check` fails on any formatting or lint difference, and the
 # test below makes `bazel test //...` fail on the same findings. Every
-# available warning is on. `bazel-*` convenience symlinks, the Python and
-# tool caches and scratch space hold no Starlark that this
-# repository owns.
+# available warning is on. `.bazel-*` and `bazel-*` convenience symlinks, the
+# Python and tool caches and scratch space hold no Starlark that this repository
+# owns.
 BUILDIFIER_EXCLUDES = [
     "./.git/*",
     "./.venv/*",
     "./.mise/*",
+    "./.bazel-*",
     "./bazel-*",
     "./node_modules/*",
     "./tmp/*",
@@ -147,6 +148,27 @@ go_arch_lint_test(
 go_mod_tidy_test(
     name = "go_mod_tidy_test",
     srcs = [":repo_files"],
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    proxy = "@go_mod_proxy//:proxy",
+)
+
+# Reachable vulnerabilities in the module's dependencies and the standard
+# library, against the Go vulnerability database. The database comes over the
+# network, so the test is manual and outside `//...`; run it by name.
+govulncheck_test(
+    name = "govulncheck_test",
+    srcs = GO_TARGETS,
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    proxy = "@go_mod_proxy//:proxy",
+)
+
+# The `bazel run` companion of the same scan, which CI runs, keeping
+# its report as an artifact.
+govulncheck(
+    name = "govulncheck",
+    srcs = GO_TARGETS,
     go_mod = "go.mod",
     go_sum = "go.sum",
     proxy = "@go_mod_proxy//:proxy",
