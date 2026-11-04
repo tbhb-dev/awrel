@@ -46,6 +46,7 @@ frontmatter
 fsfe
 funlen
 genrule
+gobco
 gochecknoglobals
 gochecksumtype
 gocognit

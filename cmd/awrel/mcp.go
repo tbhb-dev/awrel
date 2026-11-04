@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net/url"
 	"os"
@@ -86,11 +85,9 @@ func resolveToken(getenv func(string) string) (string, error) {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if pathErr, ok := errors.AsType[*fs.PathError](err); ok {
-			err = pathErr.Err
-		}
-
-		return "", fmt.Errorf("%s %s: %w", tokenFileEnv, path, err)
+		// os.ReadFile always returns a path error, whose text repeats the
+		// path. Wrapping the error beneath it keeps the path once.
+		return "", fmt.Errorf("%s %s: %w", tokenFileEnv, path, errors.Unwrap(err))
 	}
 
 	token = strings.TrimSpace(string(data))
