@@ -29,6 +29,12 @@ it("answers any other method on the webhook path with not found", async () => {
   expect(versionOf(response)).toBe(env.CF_VERSION_METADATA.id);
 });
 
+it("routes a connection", async () => {
+  const response = await exports.default.fetch("https://awrel.example/connect");
+  expect(response.status).toBe(426);
+  expect(versionOf(response)).toBe(env.CF_VERSION_METADATA.id);
+});
+
 it("routes a GitHub webhook to the receiver", async () => {
   const body = "{}";
   const response = await exports.default.fetch(

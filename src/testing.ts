@@ -2,11 +2,14 @@
 // Copyright Tony Burns
 
 import { runInDurableObject } from "cloudflare:test";
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import type { Attachment, Relay } from "./relay.ts";
 
 /** The webhook secret the tests run with; vitest.config.mjs binds the same. */
 export const SECRET = "test-webhook-secret";
+
+/** The connect token the tests run with; vitest.config.mjs binds the same. */
+export const TOKEN = "test-connect-token";
 
 /** The HMAC-SHA256 of `body` under `secret`, as lowercase hex. */
 export async function digest(body: string, secret = SECRET): Promise<string> {
@@ -78,4 +81,51 @@ export async function settle(): Promise<void> {
 /** Signs `body` under `secret` as GitHub does: `sha256=<hex>`. */
 export async function sign(body: string, secret = SECRET): Promise<string> {
   return `sha256=${await digest(body, secret)}`;
+}
+
+/** A relay connection opened through the Worker, and what it has received. */
+export interface Client {
+  readonly socket: WebSocket;
+  readonly received: string[];
+}
+
+/** Opens a relay connection through the Worker with a valid handshake. */
+export async function dial(): Promise<Client> {
+  const response = await exports.default.fetch(
+    "https://awrel.example/connect",
+    {
+      headers: {
+        Upgrade: "websocket",
+        Authorization: `Bearer ${TOKEN}`,
+        "Sec-WebSocket-Protocol": "awrel.v1",
+      },
+    },
+  );
+  const socket = response.webSocket;
+  if (socket === null) {
+    throw new Error(`no WebSocket: status ${String(response.status)}`);
+  }
+  const received: string[] = [];
+  socket.accept();
+  socket.addEventListener("message", (event) => {
+    received.push(event.data as string);
+  });
+  return { socket, received };
+}
+
+/** Sends one frame and returns the next message the client receives, parsed. */
+export async function exchange(
+  client: Client,
+  frame: string | ArrayBuffer,
+): Promise<unknown> {
+  const before = client.received.length;
+  client.socket.send(frame);
+  for (let waited = 0; waited < 1000; waited += 5) {
+    const reply = client.received[before];
+    if (reply !== undefined) {
+      return JSON.parse(reply) as unknown;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("no reply");
 }

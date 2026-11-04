@@ -6,12 +6,18 @@ import { defineConfig } from "vitest/config";
 
 // The tests run inside workerd against the top level of wrangler.jsonc, with
 // a local Durable Object namespace. The webhook secret is a Worker secret, so
-// the config binds one for the tests; it must match SECRET in src/testing.ts.
+// the config binds them for the tests; they must match SECRET and TOKEN in
+// src/testing.ts.
 export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
-      miniflare: { bindings: { GITHUB_WEBHOOK_SECRET: "test-webhook-secret" } },
+      miniflare: {
+        bindings: {
+          CONNECT_TOKEN: "test-connect-token",
+          GITHUB_WEBHOOK_SECRET: "test-webhook-secret",
+        },
+      },
     }),
   ],
   test: {
