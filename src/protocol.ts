@@ -114,11 +114,14 @@ function parse(id: string, value: unknown): Subscription | Outcome {
   };
 }
 
-/** The reply to one client message, and the new subscription list when it changed. */
-export function handle(
-  current: readonly Subscription[],
-  message: string | ArrayBuffer,
-): Outcome {
+interface Request {
+  readonly type: "subscribe" | "unsubscribe" | "list";
+  readonly id: string;
+  readonly subscription: unknown;
+}
+
+/** The request a client message holds, or the error reply it earns. */
+function read(message: string | ArrayBuffer): Outcome | Request {
   if (typeof message !== "string") {
     return fail(null, "bad_message", "messages must be text frames");
   }
@@ -134,7 +137,7 @@ export function handle(
   if (!isRecord(parsed)) {
     return fail(null, "bad_message", "messages must be JSON objects");
   }
-  const { type, id: rawId, subscription: rawSubscription } = parsed;
+  const { type, id: rawId, subscription } = parsed;
   const id =
     typeof rawId === "string" && rawId.length >= 1 && rawId.length <= 64
       ? rawId
@@ -149,6 +152,19 @@ export function handle(
       "id must be a string of 1 to 64 characters",
     );
   }
+  return { type, id, subscription };
+}
+
+/** The reply to one client message, and the new subscription list when it changed. */
+export function handle(
+  current: readonly Subscription[],
+  message: string | ArrayBuffer,
+): Outcome {
+  const request = read(message);
+  if ("reply" in request) {
+    return request;
+  }
+  const { type, id } = request;
   const unchanged = (): Outcome => ({
     reply: { type: "subscriptions", id, subscriptions: current },
     next: null,
@@ -156,7 +172,7 @@ export function handle(
   if (type === "list") {
     return unchanged();
   }
-  const subscription = parse(id, rawSubscription);
+  const subscription = parse(id, request.subscription);
   if ("reply" in subscription) {
     return subscription;
   }
