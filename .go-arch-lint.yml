@@ -2,9 +2,10 @@
 # Copyright Tony Burns
 
 ---
-# Import contracts: the command sits on the internal packages, and
-# internal/buildmeta imports nothing of the module. Every package must belong
-# to a component.
+# Import contracts: the command sits on the internal packages. The chain,
+# leaf first, is protocol, transport, relayclient; delivery builds on
+# protocol, and mcpserver on delivery and protocol. internal/buildmeta imports
+# nothing of the module. Every package must belong to a component.
 version: 3
 
 allow:
@@ -14,13 +15,33 @@ allow:
 components:
   cmd: {in: cmd/*}
   buildmeta: {in: internal/buildmeta}
+  protocol: {in: internal/protocol}
+  transport: {in: internal/transport}
+  relayclient: {in: internal/relayclient}
+  delivery: {in: internal/delivery}
+  mcpserver: {in: internal/mcpserver}
 
 vendors:
   cobra: {in: [github.com/spf13/cobra, github.com/spf13/cobra/**]}
+  mcpsdk: {in: [github.com/modelcontextprotocol/go-sdk/mcp, github.com/modelcontextprotocol/go-sdk/jsonrpc]}
+  websocket: {in: [github.com/coder/websocket, github.com/coder/websocket/**]}
 
 deps:
   cmd:
-    mayDependOn: [buildmeta]
-    canUse: [cobra]
+    mayDependOn: [buildmeta, protocol, transport, relayclient, mcpserver]
+    canUse: [cobra, websocket]  # its tests' fake relay accepts with coder/websocket
   buildmeta:
     mayDependOn: [buildmeta]  # a leaf; go-arch-lint rejects an empty list
+  protocol:
+    mayDependOn: [protocol]  # a leaf
+  transport:
+    mayDependOn: [protocol]
+    canUse: [websocket]
+  relayclient:
+    mayDependOn: [protocol, transport]
+    canUse: [websocket]  # its tests' fake relay accepts with coder/websocket
+  delivery:
+    mayDependOn: [protocol]
+  mcpserver:
+    mayDependOn: [delivery, protocol]
+    canUse: [mcpsdk]

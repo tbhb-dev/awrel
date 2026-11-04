@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Tony Burns
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@tbhb_rules//repo:defs.bzl", "repo_files")
+
+repo_files()
+
+go_library(
+    name = "transport",
+    srcs = ["transport.go"],
+    importpath = "go.tbhb.dev/awrel/internal/transport",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/protocol",
+        "@com_github_coder_websocket//:websocket",
+    ],
+)
+
+go_test(
+    name = "transport_test",
+    srcs = ["transport_internal_test.go"],
+    embed = [":transport"],
+    # The whole-module Go checks in the root package take the tests too.
+    visibility = ["//:__pkg__"],
+    deps = [
+        "//internal/protocol",
+        "@com_github_coder_websocket//:websocket",
+    ],
+)

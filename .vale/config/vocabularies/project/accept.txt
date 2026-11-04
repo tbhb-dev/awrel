@@ -4,3 +4,13 @@ Bazel
 prek
 subcommand
 x_defs
+prd
+hibernatable
+subprotocol
+subprotocols
+lowercased
+getenv
+onStderr
+newMCPCmd
+connectRelay
+totalLimit

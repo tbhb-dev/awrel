@@ -119,6 +119,11 @@ GO_TARGETS = [
     "//cmd/awrel",
     "//cmd/awrel:awrel_test",
     "//internal/buildmeta:buildmeta_test",
+    "//internal/delivery:delivery_test",
+    "//internal/mcpserver:mcpserver_test",
+    "//internal/protocol:protocol_test",
+    "//internal/relayclient:relayclient_test",
+    "//internal/transport:transport_test",
 ]
 
 golangci_lint_test(
@@ -157,12 +162,24 @@ go_mod_tidy_test(
 gomutants_test(
     name = "gomutants_test",
     cpus = 2,
+    flags = [
+        "--exclude-calls=*.DebugContext,*.InfoContext,*.WarnContext,*.ErrorContext",
+        # A mutant that breaks a wait takes the tests' own one-second limits
+        # to fail, so the 2s default floor would count it as a timeout.
+        "--timeout-min=20s",
+        "--test-flags=-failfast",
+    ],
     go_mod = "go.mod",
     go_sum = "go.sum",
     proxy = "@go_mod_proxy//:proxy",
     tests = [
         "//cmd/awrel:awrel_test",
         "//internal/buildmeta:buildmeta_test",
+        "//internal/delivery:delivery_test",
+        "//internal/mcpserver:mcpserver_test",
+        "//internal/protocol:protocol_test",
+        "//internal/relayclient:relayclient_test",
+        "//internal/transport:transport_test",
     ],
 )
 

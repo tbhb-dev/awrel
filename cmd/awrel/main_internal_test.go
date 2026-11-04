@@ -52,7 +52,7 @@ func TestRun(t *testing.T) {
 
 			var out, errOut bytes.Buffer
 
-			code := run(test.args, &out, &errOut)
+			code := run(test.args, strings.NewReader(""), &out, &errOut, func(string) string { return "" })
 			if code != test.wantCode {
 				t.Errorf("code = %d, want %d (stderr %q)", code, test.wantCode, errOut.String())
 			}
