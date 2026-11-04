@@ -32,6 +32,12 @@ Set `AWREL_CONNECT_TOKEN` to the connect token. If that variable is empty, `AWRE
 
 Start Claude Code with the development channels flag, or it drops the events. A payload over 64 KiB reaches the agent as a short note, with the attribute `truncated` set to `true`.
 
+Sessions in this repository use the staging relay through a pinned release in `.mcp.json`. They need Go and the staging token in `~/.config/awrel/stg-connect-token`:
+
+```console
+claude --dangerously-load-development-channels server:awrel
+```
+
 ## Worker
 
 The Worker and its Durable Object are in `src/`, configured by `wrangler.jsonc`, and their tests run inside `workerd`, the Workers runtime. After a change to `wrangler.jsonc`, `bazelisk run //:worker_types_test.update` regenerates `worker-configuration.d.ts`. The Worker accepts GitHub App webhooks at `POST /webhooks/github` and checks each delivery's signature against `GITHUB_WEBHOOK_SECRET`. It answers a `ping` event without relaying it. Every push to main deploys to `awrel-stg`, then `awrel-prd`, after the first manual deploy of each environment.
