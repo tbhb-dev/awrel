@@ -8,11 +8,18 @@ repo_files()
 
 go_library(
     name = "awrel_lib",
-    srcs = ["main.go"],
+    srcs = [
+        "main.go",
+        "mcp.go",
+    ],
     importpath = "go.tbhb.dev/awrel/cmd/awrel",
     visibility = ["//visibility:private"],
     deps = [
         "//internal/buildmeta",
+        "//internal/mcpserver",
+        "//internal/protocol",
+        "//internal/relayclient",
+        "//internal/transport",
         "@com_github_spf13_cobra//:cobra",
     ],
 )
@@ -25,8 +32,16 @@ go_binary(
 
 go_test(
     name = "awrel_test",
-    srcs = ["main_internal_test.go"],
+    srcs = [
+        "main_internal_test.go",
+        "mcp_internal_test.go",
+    ],
     embed = [":awrel_lib"],
     # The whole-module Go checks in the root package take the tests too.
     visibility = ["//:__pkg__"],
+    deps = [
+        "//internal/protocol",
+        "@com_github_coder_websocket//:websocket",
+        "@com_github_spf13_cobra//:cobra",
+    ],
 )

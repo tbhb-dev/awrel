@@ -106,6 +106,8 @@ linters:
       ignore-patterns:
         - 'github\.com/spf13/cobra\.Command$'
         - 'runtime/debug\..+'
+        - 'github\.com/modelcontextprotocol/go-sdk/.+'
+        - 'github\.com/coder/websocket\..+'
 
     funlen:
       lines: 100

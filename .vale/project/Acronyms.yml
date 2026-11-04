@@ -53,6 +53,7 @@ exceptions:
   - LLM
   - LTS
   - MAL
+  - MCP
   - NET
   - NOTE
   - NVDA
@@ -68,6 +69,7 @@ exceptions:
   - REPL
   - REST
   - REUSE
+  - RPC
   - RSA
   - SCA
   - SCM

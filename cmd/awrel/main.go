@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -15,17 +16,18 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
 }
 
-// run executes the root command and returns the process exit code.
-func run(args []string, stdout, stderr io.Writer) int {
-	cmd := newRootCmd()
+// run executes the root command and returns the process exit code. It reads
+// the environment only through the lookup function passed in.
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
+	cmd := newRootCmd(stdin, getenv)
 	cmd.SetArgs(args)
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
 
-	err := cmd.Execute()
+	err := cmd.ExecuteContext(context.Background())
 	if err != nil {
 		return 1
 	}
@@ -39,7 +41,7 @@ func versionString() string {
 	return fmt.Sprintf("%s (commit %s, date %s)", info.Version, info.Commit, info.Date)
 }
 
-func newRootCmd() *cobra.Command {
+func newRootCmd(stdin io.Reader, getenv func(string) string) *cobra.Command {
 	root := &cobra.Command{
 		Use:          "awrel",
 		Short:        "awrel command-line tool",
@@ -47,7 +49,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage: true,
 	}
 	root.SetVersionTemplate("awrel {{.Version}}\n")
-	root.AddCommand(newVersionCmd())
+	root.AddCommand(newVersionCmd(), newMCPCmd(stdin, getenv))
 
 	return root
 }
