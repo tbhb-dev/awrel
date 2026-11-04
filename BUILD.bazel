@@ -40,7 +40,7 @@ load(
     "workers_tsc_test",
     "workers_vitest_test",
 )
-load("@tbhb_rules_go//:defs.bzl", "go_arch_lint_test", "go_deadcode_test", "go_mod_tidy_test", "gomutants_test")
+load("@tbhb_rules_go//:defs.bzl", "go_arch_lint_test", "go_deadcode_test", "go_mod_tidy_test", "gobco_test", "gomutants_test")
 load("@tbhb_rules_typescript//:defs.bzl", "biome_test", "depcruise_test")
 load("//:vale_packages.bzl", "VALE_PACKAGES")
 load("//tools/lint:linters.bzl", "golangci_lint_test")
@@ -181,6 +181,62 @@ gomutants_test(
         "//internal/relayclient:relayclient_test",
         "//internal/transport:transport_test",
     ],
+)
+
+# Condition coverage: every condition of a package reaches both outcomes, as
+# gobco measures it. One target per package, because gobco instruments one
+# package per run. The requirement is fixed at 100%.
+gobco_test(
+    name = "awrel_gobco_test",
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    proxy = "@go_mod_proxy//:proxy",
+    tests = ["//cmd/awrel:awrel_test"],
+)
+
+gobco_test(
+    name = "buildmeta_gobco_test",
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    tests = ["//internal/buildmeta:buildmeta_test"],
+)
+
+gobco_test(
+    name = "delivery_gobco_test",
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    tests = ["//internal/delivery:delivery_test"],
+)
+
+gobco_test(
+    name = "mcpserver_gobco_test",
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    proxy = "@go_mod_proxy//:proxy",
+    tests = ["//internal/mcpserver:mcpserver_test"],
+)
+
+gobco_test(
+    name = "protocol_gobco_test",
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    tests = ["//internal/protocol:protocol_test"],
+)
+
+gobco_test(
+    name = "relayclient_gobco_test",
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    proxy = "@go_mod_proxy//:proxy",
+    tests = ["//internal/relayclient:relayclient_test"],
+)
+
+gobco_test(
+    name = "transport_gobco_test",
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    proxy = "@go_mod_proxy//:proxy",
+    tests = ["//internal/transport:transport_test"],
 )
 
 # The changes file for a diff-scope mutation run: empty, so full scope,
