@@ -13,3 +13,4 @@ getenv
 onStderr
 newMCPCmd
 connectRelay
+totalLimit

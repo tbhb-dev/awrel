@@ -293,7 +293,7 @@ func TestResolveToken(t *testing.T) {
 			"missing file",
 			map[string]string{tokenFileEnv: missing},
 			"",
-			"AWREL_CONNECT_TOKEN_FILE " + missing + ": no such file or directory",
+			"AWREL_CONNECT_TOKEN_FILE " + missing + ": " + osReason(t, missing),
 		},
 		{"empty file", map[string]string{tokenFileEnv: empty}, "", "AWREL_CONNECT_TOKEN_FILE " + empty + " is empty"},
 	}
@@ -315,6 +315,21 @@ func TestResolveToken(t *testing.T) {
 			}
 		})
 	}
+}
+
+// osReason is the operating system's own wording for why path can't be read.
+// Each system words it differently.
+func osReason(t *testing.T, path string) string {
+	t.Helper()
+
+	_, err := os.ReadFile(path)
+
+	pathErr, ok := errors.AsType[*fs.PathError](err)
+	if !ok {
+		t.Fatalf("reading %s: %v; want a path error", path, err)
+	}
+
+	return pathErr.Err.Error()
 }
 
 func TestResolveErrorsKeepTheirCause(t *testing.T) {
@@ -394,7 +409,7 @@ func TestUnreadableTokenFileFailsEveryTool(t *testing.T) {
 	running := startSession(t, env(map[string]string{tokenFileEnv: path}), 0)
 	out := running.askAll(t)
 
-	want := "not connected to the relay: AWREL_CONNECT_TOKEN_FILE " + path + ": no such file or directory"
+	want := "not connected to the relay: AWREL_CONNECT_TOKEN_FILE " + path + ": " + osReason(t, path)
 	if strings.Count(out, want) != 3 || !strings.Contains(running.errOut.String(), path) {
 		t.Errorf("stdout:\n%s\nstderr:\n%s", out, running.errOut.String())
 	}

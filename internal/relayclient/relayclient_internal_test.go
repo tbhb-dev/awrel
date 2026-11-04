@@ -889,7 +889,7 @@ func TestShutdownWhileResubscribing(t *testing.T) {
 
 	relay := newFakeRelay(t)
 	opts := quiet()
-	opts.RequestTimeout = 5 * time.Second
+	opts.RequestTimeout = 2 * waitLimit
 	client, stop := relay.start(t, opts)
 
 	_, err := client.Subscribe(t.Context(), subA())

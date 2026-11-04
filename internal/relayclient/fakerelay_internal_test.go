@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,22 @@ const (
 	typePing      = "ping"
 	typeSubscribe = "subscribe"
 )
+
+// totalLimit is how long the whole test binary may run. It normally finishes
+// in under a second. A mutant can leave a test waiting out a ten-second request
+// budget. The binary then exits with a failure of its own, ahead of the
+// mutation tester's deadline on a slow runner.
+const totalLimit = 8 * time.Second
+
+// TestMain fails the run once totalLimit has passed.
+func TestMain(m *testing.M) {
+	time.AfterFunc(totalLimit, func() {
+		fmt.Fprintln(os.Stderr, "relayclient tests exceeded", totalLimit)
+		os.Exit(1)
+	})
+
+	os.Exit(m.Run())
+}
 
 // errDial is what the fake's refused dials return.
 var errDial = errors.New("dial failed")
