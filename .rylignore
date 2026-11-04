@@ -1,3 +1,4 @@
 tmp/
 .venv/
 .mise/
+pnpm-lock.yaml

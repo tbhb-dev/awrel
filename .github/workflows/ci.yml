@@ -7,12 +7,16 @@
 # runs them all, and the few that need the network, Git history or the
 # GitHub API run as their own steps after it. A final `conclusion` job gives
 # branch protection one stable required check.
+#
+# On main, the deploy workflow runs these same jobs before it deploys,
+# rather than reacting to this workflow's result.
 name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -23,8 +27,11 @@ concurrency:
 
 jobs:
   # Bazel 9.x only, the version .bazelversion pins, on Linux (x86_64 and
-  # arm64), macOS (arm64) and Windows (x86_64). The checks that need the
-  # network or GitHub's API run on Linux only; they do not depend on the OS.
+  # arm64), macOS (arm64) and Windows (x86_64). The Worker's targets carry
+  # the "worker" tag and run on Linux only: the Worker runs on Cloudflare's
+  # Linux-based runtime, so no other OS adds coverage. The checks that need
+  # the network or GitHub's API run on Linux only; they do not depend on the
+  # OS.
   bazel:
     name: "bazel (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
@@ -35,14 +42,18 @@ jobs:
         include:
           - os: ubuntu-26.04
             release: release
+            filters: ""
           - os: ubuntu-26.04-arm
             release: release
+            filters: ""
           - os: macos-26
             release: release
+            filters: --build_tag_filters=-worker --test_tag_filters=-worker
           # Bazel runs the workspace status command without a shell on
           # Windows, so the release config there uses the batch script.
           - os: windows-2025
             release: release-windows
+            filters: --build_tag_filters=-worker --test_tag_filters=-worker
     defaults:
       run:
         shell: bash
@@ -107,10 +118,16 @@ jobs:
       # the working tree, YAML, TOML, Markdown, prose, EditorConfig,
       # workflows, shell, CODEOWNERS paths), the format check, Starlark
       # lint, nogo during the build, the Go and Python tests and linters,
-      # the coverage floor, the docs bundle and REUSE checks, the import
+      # the Worker's TypeScript checks and workerd tests (Linux only), the
+      # coverage floors, the docs bundle and REUSE checks, the import
       # contracts, and the preset staleness test.
       - name: Test
-        run: bazelisk test --config=ci //...
+        env:
+          FILTERS: ${{ matrix.filters }}
+        # FILTERS is either empty or a list of flags, split into words.
+        run: |
+          read -ra filters <<<"${FILTERS}"
+          bazelisk test --config=ci "${filters[@]}" //...
 
       - name: Build the release binary
         env:
