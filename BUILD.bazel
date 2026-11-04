@@ -2,6 +2,7 @@
 # Copyright Tony Burns
 
 load("@bazel_env.bzl", "bazel_env")
+load("@bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
 load("@bazelrc-preset.bzl", "bazelrc_preset")
 load("@buildifier_prebuilt//:rules.bzl", "buildifier", "buildifier_test")
 load("@gazelle//:def.bzl", "gazelle")
@@ -223,6 +224,20 @@ WORKER = glob(["src/**"]) + [
     "wrangler.jsonc",
 ]
 
+# The handler's sources, for //e2e:check_test, which serves them from Node.
+copy_to_bin(
+    name = "worker_sources",
+    srcs = glob(
+        ["src/*.ts"],
+        exclude = [
+            "src/*.test.ts",
+            "src/testing.ts",
+        ],
+    ),
+    tags = ["worker"],
+    visibility = ["//e2e:__pkg__"],
+)
+
 # The committed `Env` and runtime types, exactly what the pinned wrangler
 # writes; `bazel run //:worker_types_test.update` regenerates them.
 worker_types_test(
@@ -234,14 +249,19 @@ worker_types_test(
 # `bazel run //:deploy_stg` (then prd) deploys the Worker and its Durable
 # Object migrations: the new version runs //e2e:check at 0% through the
 # version override, then again on the live URL after it takes all traffic.
-# The workflow supplies the Cloudflare credentials from 1Password; the Worker
-# has no secrets yet. Each environment's first deploy is a manual bootstrap.
+# The workflow supplies the Cloudflare credentials and the GitHub App's
+# webhook secret from 1Password; the check signs its test delivery with that
+# secret. Each environment's first deploy is a manual bootstrap.
+WEBHOOK_SECRETS = {"GITHUB_WEBHOOK_SECRET": "GITHUB_WEBHOOK_SECRET"}
+
 worker_deploy(
     name = "deploy_stg",
     srcs = WORKER,
     env = "stg",
+    pass_env = ["GITHUB_WEBHOOK_SECRET"],
     post_deploy = ["//e2e:check"],
     pre_deploy = ["//e2e:check"],
+    secrets = WEBHOOK_SECRETS,
     tags = ["worker"],
     url = "https://awrel-stg.tbhb.dev",
 )
@@ -250,8 +270,10 @@ worker_deploy(
     name = "deploy_prd",
     srcs = WORKER,
     env = "prd",
+    pass_env = ["GITHUB_WEBHOOK_SECRET"],
     post_deploy = ["//e2e:check"],
     pre_deploy = ["//e2e:check"],
+    secrets = WEBHOOK_SECRETS,
     tags = ["worker"],
     url = "https://awrel.tbhb.dev",
 )

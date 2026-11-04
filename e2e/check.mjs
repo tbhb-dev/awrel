@@ -5,11 +5,20 @@
 // worker_deploy sets WORKER_URL, WORKER_VERSION_ID (the new version) and
 // WORKER_REQUEST_HEADERS (the version override before the traffic move).
 // Every response must name WORKER_VERSION_ID in Awrel-Worker-Version, so a
-// check that reached the old version fails.
+// check that reached the old version fails. Every request is a POST under
+// /webhooks/, the only paths the edge lets through. GITHUB_WEBHOOK_SECRET
+// signs the test delivery and is never printed.
+
+import { createHmac } from "node:crypto";
 
 const url = process.env.WORKER_URL;
 if (!url) {
   console.error("e2e: WORKER_URL must be set");
+  process.exit(1);
+}
+const secret = process.env.GITHUB_WEBHOOK_SECRET;
+if (!secret) {
+  console.error("e2e: GITHUB_WEBHOOK_SECRET must be set");
   process.exit(1);
 }
 const extra = JSON.parse(process.env.WORKER_REQUEST_HEADERS ?? "{}");
@@ -19,22 +28,24 @@ const failures = [];
 
 // A response, or null after recording why the request failed: a timeout or
 // network error is a failed check, not a crash.
-async function call(name, method, path) {
+async function call(name, path, headers, body) {
   try {
     return await fetch(new URL(path, url), {
-      method,
-      headers: extra,
+      method: "POST",
+      headers: { ...extra, ...headers },
+      body,
       redirect: "manual",
       signal: AbortSignal.timeout(15_000),
     });
   } catch (error) {
-    failures.push(`${name}: ${method} failed: ${error.message}`);
+    failures.push(`${name}: POST failed: ${error.message}`);
     return null;
   }
 }
 
-async function expect(name, method, path, status) {
-  const response = await call(name, method, path);
+async function expect(name, path, headers, status) {
+  const body = "{}";
+  const response = await call(name, path, headers, body);
   if (response === null) {
     return;
   }
@@ -49,8 +60,26 @@ async function expect(name, method, path, status) {
   }
 }
 
-await expect("the root is not found", "GET", "/", 404);
-await expect("an unknown path is not found", "POST", "/nope", 404);
+// The headers of a GitHub ping delivery of the body "{}", signed under `key`.
+function ping(key) {
+  const digest = createHmac("sha256", key).update("{}").digest("hex");
+  return {
+    "X-Hub-Signature-256": `sha256=${digest}`,
+    "X-GitHub-Event": "ping",
+    "X-GitHub-Delivery": `e2e-${crypto.randomUUID()}`,
+  };
+}
+
+const github = "/webhooks/github";
+await expect("an unsigned delivery is refused", github, {}, 401);
+await expect("a signed ping is accepted", github, ping(secret), 202);
+await expect(
+  "a ping under another secret is refused",
+  github,
+  ping(`not-${secret}`),
+  401,
+);
+await expect("an unknown provider is not found", "/webhooks/unknown", {}, 404);
 
 if (failures.length > 0) {
   for (const failure of failures) {

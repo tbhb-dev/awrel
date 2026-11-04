@@ -121,6 +121,7 @@ jobs:
           DEPLOY_ENV: ${{ github.job }}
           CLOUDFLARE_API_TOKEN: ${{ steps.secrets.outputs.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ steps.secrets.outputs.CLOUDFLARE_ACCOUNT_ID }}
+          GITHUB_WEBHOOK_SECRET: ${{ steps.secrets.outputs.GITHUB_WEBHOOK_SECRET }}
         run: |
           bazelisk run --config=ci "//:deploy_${DEPLOY_ENV}"
           echo "deployed=true" >> "$GITHUB_OUTPUT"

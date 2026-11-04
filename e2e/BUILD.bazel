@@ -16,7 +16,10 @@ js_binary(
 
 js_test(
     name = "check_test",
-    data = ["check.mjs"],
+    data = [
+        "check.mjs",
+        "//:worker_sources",
+    ],
     entry_point = "check_test.mjs",
     tags = ["worker"],
 )
