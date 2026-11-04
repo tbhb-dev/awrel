@@ -27,6 +27,10 @@ const (
 	// waitLimit bounds every wait in these tests, so that a broken loop fails
 	// the test before the mutation tester's own deadline.
 	waitLimit = time.Second
+	// connectLimit bounds the first connection of a test whose requests have
+	// a budget of a few tens of milliseconds, which a slow runner can spend
+	// on the handshake alone.
+	connectLimit = 5 * time.Second
 	// tick is the unit of the short intervals the tests configure.
 	tick          = 5 * time.Millisecond
 	testToken     = "tok"

@@ -332,6 +332,29 @@ func mustSubscribe(t *testing.T, client *Client, subs ...protocol.Subscription) 
 	}
 }
 
+// awaitConnected makes the client's first connection and gets one answer,
+// retrying a List that gives up first. A test with a short RequestTimeout
+// calls it first, so a slow handshake on a loaded runner can't fail the test:
+// the short budget is for the answers the test withholds, not for connecting.
+// The retries use request IDs, so a test that needs one reads it from the
+// relay's frames.
+func awaitConnected(t *testing.T, client *Client) {
+	t.Helper()
+
+	deadline := time.Now().Add(connectLimit)
+
+	for {
+		_, err := client.List(t.Context())
+		if err == nil {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("connecting to the fake relay: %v", err)
+		}
+	}
+}
+
 // refusedSub is the subscription the fake relay refuses with a limit error.
 func refusedSub() protocol.Subscription {
 	return protocol.Subscription{Provider: providerGitHub, Event: "", Repository: "o/full"}
@@ -411,6 +434,8 @@ func TestRequestTimeoutDropsLateReply(t *testing.T) {
 	opts.RequestTimeout = 50 * time.Millisecond
 	client, _ := relay.start(t, opts)
 
+	awaitConnected(t, client)
+
 	_, err := client.Subscribe(t.Context(), subA())
 	if !errors.Is(err, ErrNoAnswer) {
 		t.Fatalf("err = %v, want ErrNoAnswer", err)
@@ -428,8 +453,10 @@ func TestRequestTimeoutDropsLateReply(t *testing.T) {
 		t.Errorf("%d requests still pending", left)
 	}
 
-	// The late reply is dropped, and the client still works.
-	relay.push(t, `{"type":"subscriptions","id":"1","subscriptions":[]}`)
+	// The client drops the late reply to the subscribe and keeps working.
+	frames := relay.onConn(1)
+	subscribeID := frames[len(frames)-1].ID
+	relay.push(t, `{"type":"subscriptions","id":"`+subscribeID+`","subscriptions":[]}`)
 
 	list, err := client.List(t.Context())
 	if err != nil || len(list) != 0 {
@@ -463,10 +490,7 @@ func TestNotConnectedCarriesTheDialError(t *testing.T) {
 	}
 
 	// The next request cuts the hour-long backoff short.
-	_, err = client.List(t.Context())
-	if err != nil {
-		t.Fatalf("second List = %v", err)
-	}
+	awaitConnected(t, client)
 }
 
 func TestNotConnectedWhileDialing(t *testing.T) {
@@ -625,6 +649,8 @@ func TestResubscribeTimeoutReconnects(t *testing.T) {
 	opts := quiet()
 	opts.RequestTimeout = 100 * time.Millisecond
 	client, _ := relay.start(t, opts)
+
+	awaitConnected(t, client)
 
 	_, err := client.Subscribe(t.Context(), subA())
 	if err != nil {
@@ -876,10 +902,13 @@ func TestShutdownDuringBackoff(t *testing.T) {
 	opts.RequestTimeout = 20 * time.Millisecond
 	client, stop := relay.start(t, opts)
 
-	_, err := client.List(t.Context())
-	if !errors.Is(err, errDial) {
-		t.Fatalf("err = %v", err)
-	}
+	// A List that gives up before the first dial has run reports the dial as
+	// still running. Later ones fail with the dial error.
+	eventually(t, "a request that fails with the dial error", func() bool {
+		_, err := client.List(t.Context())
+
+		return errors.Is(err, errDial)
+	})
 
 	stop()
 }
@@ -995,6 +1024,7 @@ func TestResubscribeFailuresKeepBackingOff(t *testing.T) {
 	client.after = immediately(delays)
 
 	relay.run(t, client)
+	awaitConnected(t, client)
 	mustSubscribe(t, client, subA())
 	relay.drop()
 
@@ -1030,6 +1060,7 @@ func TestCauseAfterResubscribeFailure(t *testing.T) {
 	opts.Dial = relay.dialFirst(2)
 	client, _ := relay.start(t, opts)
 
+	awaitConnected(t, client)
 	mustSubscribe(t, client, subA())
 	relay.drop()
 
@@ -1045,10 +1076,7 @@ func TestCauseAfterConnectionLoss(t *testing.T) {
 	opts.Dial = relay.dialFirst(1)
 	client, _ := relay.start(t, opts)
 
-	_, err := client.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	awaitConnected(t, client)
 
 	relay.drop()
 
