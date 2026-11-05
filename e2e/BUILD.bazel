@@ -1,25 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright Tony Burns
 
-load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_test")
+load("@aspect_rules_js//js:defs.bzl", "js_binary")
 load("@tbhb_rules//repo:defs.bzl", "repo_files")
+load("@tbhb_rules_typescript//:defs.bzl", "vitest_test")
 
 repo_files()
 
 # The deploys' pre- and post-deploy check against a deployed Worker.
 js_binary(
     name = "check",
-    entry_point = "check.mjs",
+    data = ["check.mjs"],
+    entry_point = "main.mjs",
     tags = ["worker"],
     visibility = ["//:__pkg__"],
 )
 
-js_test(
+# The check against the Worker's own handlers, in-process, with coverage.
+vitest_test(
     name = "check_test",
-    data = [
-        "check.mjs",
-        "//:worker_sources",
-    ],
-    entry_point = "check_test.mjs",
+    srcs = glob(["*.mjs"]) + ["//:worker_sources"],
+    config = "vitest.config.mjs",
+    node_modules = ["//:node_modules"],
     tags = ["worker"],
 )
