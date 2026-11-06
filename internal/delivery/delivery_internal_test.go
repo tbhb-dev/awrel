@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"strconv"
 	"strings"
 	"testing"
 
+	"go.tbhb.dev/awrel/internal/compact"
 	"go.tbhb.dev/awrel/internal/protocol"
 )
 
@@ -129,7 +131,7 @@ func TestChannelParams(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := decode(t, channelParams(test.event))
+			got := decode(t, channelParams(test.event, false))
 
 			if got.Content != test.want {
 				t.Errorf("content = %q, want %q", got.Content, test.want)
@@ -145,7 +147,7 @@ func TestChannelParams(t *testing.T) {
 func TestContentHoldsJSONText(t *testing.T) {
 	t.Parallel()
 
-	raw := channelParams(newEvent("x", "d", "", json.RawMessage(`{"a":1}`)))
+	raw := channelParams(newEvent("x", "d", "", json.RawMessage(`{"a":1}`)), false)
 
 	want := `{"meta":{"delivery":"d","event":"x","provider":"github"},"content":"{\"a\":1}"}`
 	if string(raw) != want {
@@ -160,7 +162,7 @@ func TestPayloadSizeBoundary(t *testing.T) {
 		t.Parallel()
 
 		event := newEvent("issue_comment", "d9", ownerRepo, payloadOfSize(t, maxContentBytes))
-		got := decode(t, channelParams(event))
+		got := decode(t, channelParams(event, false))
 
 		if got.Content != string(event.Payload) {
 			t.Errorf("content of %d bytes is not the payload", len(got.Content))
@@ -174,7 +176,10 @@ func TestPayloadSizeBoundary(t *testing.T) {
 	t.Run("one byte over is replaced by a note", func(t *testing.T) {
 		t.Parallel()
 
-		got := decode(t, channelParams(newEvent("issue_comment", "d9", ownerRepo, payloadOfSize(t, maxContentBytes+1))))
+		got := decode(
+			t,
+			channelParams(newEvent("issue_comment", "d9", ownerRepo, payloadOfSize(t, maxContentBytes+1)), false),
+		)
 
 		want := `github event "issue_comment", action "opened", repository o/r, delivery d9. ` +
 			`The payload is 65537 bytes, too large to deliver. ` + noteTail
@@ -192,7 +197,7 @@ func TestPayloadSizeBoundary(t *testing.T) {
 		t.Parallel()
 
 		big := json.RawMessage(`["` + strings.Repeat("x", maxContentBytes) + `"]`)
-		got := decode(t, channelParams(newEvent(pingEvent, "d0", "", big)))
+		got := decode(t, channelParams(newEvent(pingEvent, "d0", "", big), false))
 
 		want := `github event "ping", delivery d0. The payload is 65540 bytes, too large to deliver. ` + noteTail
 		if got.Content != want {
@@ -225,7 +230,7 @@ func TestDeliver(t *testing.T) {
 
 		notifier := &recordingNotifier{err: nil, method: "", params: nil}
 
-		err := NewChannel(notifier).Deliver(t.Context(), event)
+		err := NewChannel(notifier, Options{Compact: false}).Deliver(t.Context(), event)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -234,7 +239,7 @@ func TestDeliver(t *testing.T) {
 			t.Errorf("method = %q", notifier.method)
 		}
 
-		if string(notifier.params) != string(channelParams(event)) {
+		if string(notifier.params) != string(channelParams(event, false)) {
 			t.Errorf("params = %s", notifier.params)
 		}
 	})
@@ -244,11 +249,125 @@ func TestDeliver(t *testing.T) {
 
 		notifier := &recordingNotifier{err: errBoom, method: "", params: nil}
 
-		err := NewChannel(notifier).Deliver(t.Context(), event)
+		err := NewChannel(notifier, Options{Compact: false}).Deliver(t.Context(), event)
 		if !errors.Is(err, errBoom) || !strings.Contains(err.Error(), "send channel notification") {
 			t.Errorf("Deliver = %v", err)
 		}
 	})
+}
+
+const (
+	fullPayload = `{"action":"opened","url":"u","sender":{"login":"user-1","id":1,"type":"User"},"number":5}`
+	wantCompact = `{"action":"opened","sender":{"login":"user-1","type":"User"},"number":5}`
+)
+
+func TestCompactChannelMarksCompactedPayload(t *testing.T) {
+	t.Parallel()
+
+	got := decode(t, channelParams(newEvent(pingEvent, "d1", ownerRepo, json.RawMessage(fullPayload)), true))
+
+	if got.Content != wantCompact {
+		t.Errorf("content = %q, want %q", got.Content, wantCompact)
+	}
+
+	wantMeta := metaOf(pingEvent, "d1", "repository", ownerRepo, "action", "opened", "compact", "true")
+	if !maps.Equal(got.Meta, wantMeta) {
+		t.Errorf("meta = %v, want %v", got.Meta, wantMeta)
+	}
+}
+
+func TestCompactChannelWholeDeliveryHasNoMark(t *testing.T) {
+	t.Parallel()
+
+	got := decode(t, channelParams(newEvent(pingEvent, "d1", "", json.RawMessage(fullPayload)), false))
+
+	if got.Content != fullPayload {
+		t.Errorf("content = %q, want %q", got.Content, fullPayload)
+	}
+
+	if _, marked := got.Meta["compact"]; marked {
+		t.Error("meta marks a whole payload as compact")
+	}
+}
+
+func TestCompactChannelInvalidJSONGoesWhole(t *testing.T) {
+	t.Parallel()
+
+	got := decode(t, channelParams(newEvent(pingEvent, "d2", "", json.RawMessage(`{"action":`)), true))
+
+	if got.Content != `{"action":` {
+		t.Errorf("content = %q", got.Content)
+	}
+
+	if !maps.Equal(got.Meta, metaOf(pingEvent, "d2")) {
+		t.Errorf("meta = %v", got.Meta)
+	}
+}
+
+func TestCompactChannelCompactsBeforeSizeCap(t *testing.T) {
+	t.Parallel()
+
+	big := json.RawMessage(`{"action":"opened","url":"` + strings.Repeat("x", 2*maxContentBytes) + `","number":1}`)
+
+	got := decode(t, channelParams(newEvent(pingEvent, "d3", "", big), true))
+
+	if got.Content != `{"action":"opened","number":1}` {
+		t.Errorf("content = %q", got.Content)
+	}
+
+	if _, truncated := got.Meta["truncated"]; truncated || got.Meta["compact"] != "true" {
+		t.Errorf("meta = %v", got.Meta)
+	}
+}
+
+func TestCompactChannelStillOverCapGetsNote(t *testing.T) {
+	t.Parallel()
+
+	// Forty strings, each cut to 2 KiB, stay over 64 KiB.
+	items := make([]string, 40)
+	for i := range items {
+		items[i] = `"` + strings.Repeat("y", 3000) + `"`
+	}
+
+	big := json.RawMessage(`{"action":"opened","list":[` + strings.Join(items, ",") + `]}`)
+
+	compacted, err := compact.Payload(githubProvider, pingEvent, big)
+	if err != nil || len(compacted) <= maxContentBytes {
+		t.Fatalf("test payload compacts to %d bytes, %v", len(compacted), err)
+	}
+
+	got := decode(t, channelParams(newEvent(pingEvent, "d4", "", big), true))
+
+	want := `github event "ping", action "opened", delivery d4. The payload is ` + strconv.Itoa(len(compacted)) +
+		` bytes, too large to deliver. ` + noteTail
+	if got.Content != want {
+		t.Errorf("content = %q, want %q", got.Content, want)
+	}
+
+	wantMeta := metaOf(pingEvent, "d4", "action", "opened", "truncated", "true", "compact", "true")
+	if !maps.Equal(got.Meta, wantMeta) {
+		t.Errorf("meta = %v, want %v", got.Meta, wantMeta)
+	}
+}
+
+func TestDeliverCompact(t *testing.T) {
+	t.Parallel()
+
+	event := newEvent("create", "d8", "", json.RawMessage(`{"ref":"r","ref_type":"branch","description":"d"}`))
+	notifier := &recordingNotifier{err: nil, method: "", params: nil}
+
+	err := NewChannel(notifier, Options{Compact: true}).Deliver(t.Context(), event)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(notifier.params) != string(channelParams(event, true)) {
+		t.Errorf("params = %s", notifier.params)
+	}
+
+	if got := decode(t, notifier.params); got.Content != `{"ref":"r","ref_type":"branch"}` {
+		t.Errorf("content = %q", got.Content)
+	}
 }
 
 func TestMustMarshalPanics(t *testing.T) {

@@ -33,6 +33,7 @@ direnv
 docstrings
 dunder
 dupl
+errchkjson
 esac
 execpath
 exhaustruct

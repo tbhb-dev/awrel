@@ -1,0 +1,20 @@
+{
+  "action": "created",
+  "issue": {
+    "html_url": "https://github.com/example-org/example-repo/issues/43",
+    "number": 43,
+    "title": "Retries hammer the upstream",
+    "state": "open"
+  },
+  "comment": {
+    "html_url": "https://github.com/example-org/example-repo/issues/43#issuecomment-950002",
+    "id": 950002,
+    "user": {
+      "login": "user-2"
+    },
+    "body": "I can reproduce this on v0.1.0."
+  },
+  "sender": {
+    "login": "user-2"
+  }
+}

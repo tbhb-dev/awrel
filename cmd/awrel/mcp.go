@@ -29,6 +29,10 @@ import (
 const (
 	defaultEndpoint = "wss://awrel.tbhb.dev/connect"
 	endpointEnv     = "AWREL_ENDPOINT"
+	formatEnv       = "AWREL_FORMAT"
+	formatCompact   = "compact"
+	formatFull      = "full"
+	defaultFormat   = formatCompact
 	tokenEnv        = "AWREL_CONNECT_TOKEN"      //nolint:gosec // a variable name, not a credential
 	tokenFileEnv    = "AWREL_CONNECT_TOKEN_FILE" //nolint:gosec // a variable name, not a credential
 )
@@ -39,6 +43,7 @@ var (
 	errBadEndpoint    = errors.New("invalid endpoint")
 	errEndpointScheme = errors.New("the scheme must be ws or wss")
 	errEndpointNoHost = errors.New("the host is missing")
+	errBadFormat      = errors.New("invalid format")
 )
 
 // resolveEndpoint returns the relay URL from the flag, else AWREL_ENDPOINT,
@@ -67,6 +72,28 @@ func resolveEndpoint(flagValue string, getenv func(string) string) (string, erro
 	}
 
 	return endpoint, nil
+}
+
+// resolveFormat returns whether events are delivered compact, from the flag,
+// else AWREL_FORMAT, else the default. The value is compact or full.
+func resolveFormat(flagValue string, getenv func(string) string) (bool, error) {
+	format := flagValue
+	if format == "" {
+		format = getenv(formatEnv)
+	}
+
+	if format == "" {
+		format = defaultFormat
+	}
+
+	switch format {
+	case formatCompact:
+		return true, nil
+	case formatFull:
+		return false, nil
+	default:
+		return false, fmt.Errorf("%w %q: the value must be %s or %s", errBadFormat, format, formatCompact, formatFull)
+	}
 }
 
 // resolveToken returns the connect token from AWREL_CONNECT_TOKEN, else the
@@ -130,7 +157,7 @@ func newMCPCmd(stdin io.Reader, getenv func(string) string) *cobra.Command {
 // newMCPCmdWithTimeout is newMCPCmd with the relay request budget set, where
 // zero means the default.
 func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTimeout time.Duration) *cobra.Command {
-	var endpointFlag string
+	var endpointFlag, formatFlag string
 
 	cmd := &cobra.Command{
 		Use:   "mcp",
@@ -142,11 +169,19 @@ func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTi
 				return err
 			}
 
-			return serveMCP(cmd, stdin, endpoint, getenv, requestTimeout)
+			compact, err := resolveFormat(formatFlag, getenv)
+			if err != nil {
+				return err
+			}
+
+			return serveMCP(cmd, stdin, endpoint, compact, getenv, requestTimeout)
 		},
 	}
 	cmd.Flags().
 		StringVar(&endpointFlag, "endpoint", "", "relay URL (default $"+endpointEnv+", then "+defaultEndpoint+")")
+	cmd.Flags().
+		StringVar(&formatFlag, "format", "", "event payloads: "+formatCompact+" or "+formatFull+
+			" (default $"+formatEnv+", then "+defaultFormat+")")
 
 	return cmd
 }
@@ -154,7 +189,8 @@ func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTi
 // serveMCP runs the MCP server on stdin and stdout until the input ends or a
 // signal arrives, and the relay connection alongside it.
 func serveMCP(
-	cmd *cobra.Command, stdin io.Reader, endpoint string, getenv func(string) string, requestTimeout time.Duration,
+	cmd *cobra.Command, stdin io.Reader, endpoint string, compact bool, getenv func(string) string,
+	requestTimeout time.Duration,
 ) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -177,6 +213,7 @@ func serveMCP(
 		Logger:  logger,
 		Relay:   relay,
 		Version: buildmeta.Get().Version,
+		Compact: compact,
 	})
 
 	relayCtx, cancelRelay := context.WithCancel(ctx)

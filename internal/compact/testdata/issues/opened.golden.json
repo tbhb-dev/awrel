@@ -1,0 +1,21 @@
+{
+  "action": "opened",
+  "issue": {
+    "html_url": "https://github.com/example-org/example-repo/issues/43",
+    "number": 43,
+    "title": "Retries hammer the upstream",
+    "user": {
+      "login": "user-1"
+    },
+    "labels": [
+      {
+        "name": "bug"
+      }
+    ],
+    "state": "open",
+    "body": "## Summary\n\nThis change reworks how the example service retries failed requests. The previous loop retried immediately and could hammer the upstream.\n\n## Details\n\n- Add exponential backoff with jitter\n- Cap the delay at 30 seconds\n- Add tests for the cap and the jitter bounds\n\n## Testing\n\nRan the unit tests and the integration suite locally.\n"
+  },
+  "sender": {
+    "login": "user-1"
+  }
+}

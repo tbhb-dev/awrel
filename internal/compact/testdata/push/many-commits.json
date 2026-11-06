@@ -1,0 +1,821 @@
+{
+  "ref": "refs/heads/feat/backoff",
+  "before": "abc0000000000000000000000000000000000000",
+  "after": "abc0000000000000000000000000000000000019",
+  "repository": {
+    "id": 5001,
+    "node_id": "node-id",
+    "name": "example-repo",
+    "full_name": "example-org/example-repo",
+    "private": true,
+    "owner": {
+      "login": "example-org",
+      "id": 2001,
+      "node_id": "node-id",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2001?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/example-org",
+      "html_url": "https://github.com/example-org",
+      "followers_url": "https://api.github.com/users/example-org/followers",
+      "following_url": "https://api.github.com/users/example-org/following{/other_user}",
+      "gists_url": "https://api.github.com/users/example-org/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/example-org/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/example-org/subscriptions",
+      "organizations_url": "https://api.github.com/users/example-org/orgs",
+      "repos_url": "https://api.github.com/users/example-org/repos",
+      "events_url": "https://api.github.com/users/example-org/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/example-org/received_events",
+      "type": "Organization",
+      "site_admin": false
+    },
+    "html_url": "https://github.com/example-org/example-repo",
+    "description": "An example repository",
+    "fork": false,
+    "url": "https://api.github.com/repos/example-org/example-repo",
+    "default_branch": "main",
+    "created_at": "2025-01-10T09:00:00Z",
+    "updated_at": "2026-11-05T08:00:00Z",
+    "pushed_at": "2026-11-05T08:59:00Z",
+    "git_url": "git://github.com/example-org/example-repo.git",
+    "ssh_url": "git@github.com:example-org/example-repo.git",
+    "clone_url": "https://github.com/example-org/example-repo.git",
+    "size": 1234,
+    "stargazers_count": 3,
+    "language": "Go",
+    "has_issues": true,
+    "archived": false,
+    "disabled": false,
+    "open_issues_count": 4,
+    "license": null,
+    "visibility": "private",
+    "forks": 0,
+    "open_issues": 4,
+    "watchers": 3,
+    "forks_url": "https://api.github.com/repos/example-org/example-repo/forks",
+    "keys_url": "https://api.github.com/repos/example-org/example-repo/keys",
+    "collaborators_url": "https://api.github.com/repos/example-org/example-repo/collaborators",
+    "teams_url": "https://api.github.com/repos/example-org/example-repo/teams",
+    "hooks_url": "https://api.github.com/repos/example-org/example-repo/hooks",
+    "issue_events_url": "https://api.github.com/repos/example-org/example-repo/issue_events",
+    "events_url": "https://api.github.com/repos/example-org/example-repo/events",
+    "assignees_url": "https://api.github.com/repos/example-org/example-repo/assignees",
+    "branches_url": "https://api.github.com/repos/example-org/example-repo/branches",
+    "tags_url": "https://api.github.com/repos/example-org/example-repo/tags",
+    "blobs_url": "https://api.github.com/repos/example-org/example-repo/blobs",
+    "git_tags_url": "https://api.github.com/repos/example-org/example-repo/git_tags",
+    "git_refs_url": "https://api.github.com/repos/example-org/example-repo/git_refs",
+    "trees_url": "https://api.github.com/repos/example-org/example-repo/trees",
+    "statuses_url": "https://api.github.com/repos/example-org/example-repo/statuses",
+    "languages_url": "https://api.github.com/repos/example-org/example-repo/languages",
+    "stargazers_url": "https://api.github.com/repos/example-org/example-repo/stargazers",
+    "contributors_url": "https://api.github.com/repos/example-org/example-repo/contributors",
+    "subscribers_url": "https://api.github.com/repos/example-org/example-repo/subscribers",
+    "subscription_url": "https://api.github.com/repos/example-org/example-repo/subscription",
+    "commits_url": "https://api.github.com/repos/example-org/example-repo/commits",
+    "git_commits_url": "https://api.github.com/repos/example-org/example-repo/git_commits",
+    "comments_url": "https://api.github.com/repos/example-org/example-repo/comments{/number}",
+    "issue_comment_url": "https://api.github.com/repos/example-org/example-repo/issue_comment",
+    "contents_url": "https://api.github.com/repos/example-org/example-repo/contents",
+    "compare_url": "https://api.github.com/repos/example-org/example-repo/compare",
+    "merges_url": "https://api.github.com/repos/example-org/example-repo/merges",
+    "archive_url": "https://api.github.com/repos/example-org/example-repo/archive",
+    "downloads_url": "https://api.github.com/repos/example-org/example-repo/downloads",
+    "issues_url": "https://api.github.com/repos/example-org/example-repo/issues{/number}",
+    "pulls_url": "https://api.github.com/repos/example-org/example-repo/pulls{/number}",
+    "milestones_url": "https://api.github.com/repos/example-org/example-repo/milestones{/number}",
+    "notifications_url": "https://api.github.com/repos/example-org/example-repo/notifications",
+    "labels_url": "https://api.github.com/repos/example-org/example-repo/labels",
+    "releases_url": "https://api.github.com/repos/example-org/example-repo/releases",
+    "deployments_url": "https://api.github.com/repos/example-org/example-repo/deployments",
+    "stargazers": 3,
+    "master_branch": "main",
+    "organization": "example-org"
+  },
+  "pusher": {
+    "name": "user-1",
+    "email": "user-1@example.com"
+  },
+  "organization": {
+    "login": "example-org",
+    "id": 2001,
+    "node_id": "node-id",
+    "url": "https://api.github.com/orgs/example-org",
+    "repos_url": "https://api.github.com/orgs/example-org/repos",
+    "avatar_url": "https://avatars.githubusercontent.com/u/2001?v=4",
+    "description": null
+  },
+  "enterprise": {
+    "id": 77,
+    "slug": "example-enterprise",
+    "name": "Example Enterprise",
+    "node_id": "node-id",
+    "html_url": "https://github.com/enterprises/example-enterprise"
+  },
+  "sender": {
+    "login": "user-1",
+    "id": 1001,
+    "node_id": "node-id",
+    "avatar_url": "https://avatars.githubusercontent.com/u/1001?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/user-1",
+    "html_url": "https://github.com/user-1",
+    "followers_url": "https://api.github.com/users/user-1/followers",
+    "following_url": "https://api.github.com/users/user-1/following{/other_user}",
+    "gists_url": "https://api.github.com/users/user-1/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/user-1/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/user-1/subscriptions",
+    "organizations_url": "https://api.github.com/users/user-1/orgs",
+    "repos_url": "https://api.github.com/users/user-1/repos",
+    "events_url": "https://api.github.com/users/user-1/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/user-1/received_events",
+    "type": "User",
+    "site_admin": false
+  },
+  "installation": {
+    "id": 9001,
+    "node_id": "node-id"
+  },
+  "created": false,
+  "deleted": false,
+  "forced": false,
+  "base_ref": null,
+  "compare": "https://github.com/example-org/example-repo/compare/abc000000000...abc000000000",
+  "commits": [
+    {
+      "id": "abc0000000000000000000000000000000000001",
+      "tree_id": "abc00000000000000000000000000000000001f5",
+      "distinct": true,
+      "message": "feat: step 1\n\nLonger explanation of step 1 that the compact form drops.",
+      "timestamp": "2026-11-05T08:01:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000001",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file1.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000002",
+      "tree_id": "abc00000000000000000000000000000000001f6",
+      "distinct": true,
+      "message": "feat: step 2\n\nLonger explanation of step 2 that the compact form drops.",
+      "timestamp": "2026-11-05T08:02:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000002",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file2.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000003",
+      "tree_id": "abc00000000000000000000000000000000001f7",
+      "distinct": true,
+      "message": "feat: step 3\n\nLonger explanation of step 3 that the compact form drops.",
+      "timestamp": "2026-11-05T08:03:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000003",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file3.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000004",
+      "tree_id": "abc00000000000000000000000000000000001f8",
+      "distinct": true,
+      "message": "feat: step 4\n\nLonger explanation of step 4 that the compact form drops.",
+      "timestamp": "2026-11-05T08:04:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000004",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file4.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000005",
+      "tree_id": "abc00000000000000000000000000000000001f9",
+      "distinct": true,
+      "message": "feat: step 5\n\nLonger explanation of step 5 that the compact form drops.",
+      "timestamp": "2026-11-05T08:05:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000005",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file5.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000006",
+      "tree_id": "abc00000000000000000000000000000000001fa",
+      "distinct": true,
+      "message": "feat: step 6\n\nLonger explanation of step 6 that the compact form drops.",
+      "timestamp": "2026-11-05T08:06:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000006",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file6.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000007",
+      "tree_id": "abc00000000000000000000000000000000001fb",
+      "distinct": true,
+      "message": "feat: step 7\n\nLonger explanation of step 7 that the compact form drops.",
+      "timestamp": "2026-11-05T08:07:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000007",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file7.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000008",
+      "tree_id": "abc00000000000000000000000000000000001fc",
+      "distinct": true,
+      "message": "feat: step 8\n\nLonger explanation of step 8 that the compact form drops.",
+      "timestamp": "2026-11-05T08:08:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000008",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file8.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000009",
+      "tree_id": "abc00000000000000000000000000000000001fd",
+      "distinct": true,
+      "message": "feat: step 9\n\nLonger explanation of step 9 that the compact form drops.",
+      "timestamp": "2026-11-05T08:09:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000009",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file9.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc000000000000000000000000000000000000a",
+      "tree_id": "abc00000000000000000000000000000000001fe",
+      "distinct": true,
+      "message": "feat: step 10\n\nLonger explanation of step 10 that the compact form drops.",
+      "timestamp": "2026-11-05T08:10:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc000000000000000000000000000000000000a",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file10.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc000000000000000000000000000000000000b",
+      "tree_id": "abc00000000000000000000000000000000001ff",
+      "distinct": true,
+      "message": "feat: step 11\n\nLonger explanation of step 11 that the compact form drops.",
+      "timestamp": "2026-11-05T08:11:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc000000000000000000000000000000000000b",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file11.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc000000000000000000000000000000000000c",
+      "tree_id": "abc0000000000000000000000000000000000200",
+      "distinct": true,
+      "message": "feat: step 12\n\nLonger explanation of step 12 that the compact form drops.",
+      "timestamp": "2026-11-05T08:12:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc000000000000000000000000000000000000c",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file12.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc000000000000000000000000000000000000d",
+      "tree_id": "abc0000000000000000000000000000000000201",
+      "distinct": true,
+      "message": "feat: step 13\n\nLonger explanation of step 13 that the compact form drops.",
+      "timestamp": "2026-11-05T08:13:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc000000000000000000000000000000000000d",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file13.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc000000000000000000000000000000000000e",
+      "tree_id": "abc0000000000000000000000000000000000202",
+      "distinct": true,
+      "message": "feat: step 14\n\nLonger explanation of step 14 that the compact form drops.",
+      "timestamp": "2026-11-05T08:14:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc000000000000000000000000000000000000e",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file14.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc000000000000000000000000000000000000f",
+      "tree_id": "abc0000000000000000000000000000000000203",
+      "distinct": true,
+      "message": "feat: step 15\n\nLonger explanation of step 15 that the compact form drops.",
+      "timestamp": "2026-11-05T08:15:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc000000000000000000000000000000000000f",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file15.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000010",
+      "tree_id": "abc0000000000000000000000000000000000204",
+      "distinct": true,
+      "message": "feat: step 16\n\nLonger explanation of step 16 that the compact form drops.",
+      "timestamp": "2026-11-05T08:16:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000010",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file16.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000011",
+      "tree_id": "abc0000000000000000000000000000000000205",
+      "distinct": true,
+      "message": "feat: step 17\n\nLonger explanation of step 17 that the compact form drops.",
+      "timestamp": "2026-11-05T08:17:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000011",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file17.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000012",
+      "tree_id": "abc0000000000000000000000000000000000206",
+      "distinct": true,
+      "message": "feat: step 18\n\nLonger explanation of step 18 that the compact form drops.",
+      "timestamp": "2026-11-05T08:18:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000012",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file18.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000013",
+      "tree_id": "abc0000000000000000000000000000000000207",
+      "distinct": true,
+      "message": "feat: step 19\n\nLonger explanation of step 19 that the compact form drops.",
+      "timestamp": "2026-11-05T08:19:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000013",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file19.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000014",
+      "tree_id": "abc0000000000000000000000000000000000208",
+      "distinct": true,
+      "message": "feat: step 20\n\nLonger explanation of step 20 that the compact form drops.",
+      "timestamp": "2026-11-05T08:20:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000014",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file20.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000015",
+      "tree_id": "abc0000000000000000000000000000000000209",
+      "distinct": true,
+      "message": "feat: step 21\n\nLonger explanation of step 21 that the compact form drops.",
+      "timestamp": "2026-11-05T08:21:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000015",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file21.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000016",
+      "tree_id": "abc000000000000000000000000000000000020a",
+      "distinct": true,
+      "message": "feat: step 22\n\nLonger explanation of step 22 that the compact form drops.",
+      "timestamp": "2026-11-05T08:22:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000016",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file22.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000017",
+      "tree_id": "abc000000000000000000000000000000000020b",
+      "distinct": true,
+      "message": "feat: step 23\n\nLonger explanation of step 23 that the compact form drops.",
+      "timestamp": "2026-11-05T08:23:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000017",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file23.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000018",
+      "tree_id": "abc000000000000000000000000000000000020c",
+      "distinct": true,
+      "message": "feat: step 24\n\nLonger explanation of step 24 that the compact form drops.",
+      "timestamp": "2026-11-05T08:24:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000018",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file24.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000019",
+      "tree_id": "abc000000000000000000000000000000000020d",
+      "distinct": true,
+      "message": "feat: step 25\n\nLonger explanation of step 25 that the compact form drops.",
+      "timestamp": "2026-11-05T08:25:00Z",
+      "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000019",
+      "author": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "committer": {
+        "name": "User One",
+        "email": "user-1@example.com",
+        "username": "user-1"
+      },
+      "added": [
+        "internal/retry/file25.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    }
+  ],
+  "head_commit": {
+    "id": "abc0000000000000000000000000000000000019",
+    "tree_id": "abc000000000000000000000000000000000020d",
+    "distinct": true,
+    "message": "feat: step 25\n\nLonger explanation of step 25 that the compact form drops.",
+    "timestamp": "2026-11-05T08:25:00Z",
+    "url": "https://github.com/example-org/example-repo/commit/abc0000000000000000000000000000000000019",
+    "author": {
+      "name": "User One",
+      "email": "user-1@example.com",
+      "username": "user-1"
+    },
+    "committer": {
+      "name": "User One",
+      "email": "user-1@example.com",
+      "username": "user-1"
+    },
+    "added": [
+      "internal/retry/file25.go"
+    ],
+    "removed": [],
+    "modified": [
+      "README.md",
+      "internal/retry/retry.go"
+    ]
+  }
+}

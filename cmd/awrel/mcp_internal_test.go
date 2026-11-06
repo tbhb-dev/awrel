@@ -37,6 +37,8 @@ const (
 	unreachable   = "ws://127.0.0.1:1/connect"
 	envURL        = "ws://env.example/connect"
 	envToken      = "tok-env"
+	mcpCommand    = "mcp"
+	badFormat     = "brief"
 	mcpHandshake  = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25",` +
 		`"capabilities":{},"clientInfo":{"name":"claude-code","version":"1"}}}` + "\n" +
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n"
@@ -111,7 +113,7 @@ func startMCP(
 		cancel: cancel,
 	}
 
-	root.SetArgs(append([]string{"mcp"}, args...))
+	root.SetArgs(append([]string{mcpCommand}, args...))
 	root.SetOut(running.out)
 	root.SetErr(running.errOut)
 
@@ -401,7 +403,7 @@ func TestInvalidEndpointExitsWithError(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 
-	code := run([]string{"mcp", "--endpoint", "http://x.example"}, strings.NewReader(""), &out, &errOut, env(nil))
+	code := run([]string{mcpCommand, "--endpoint", "http://x.example"}, strings.NewReader(""), &out, &errOut, env(nil))
 	if code != 1 || !strings.HasPrefix(errOut.String(), "Error: invalid endpoint ") || out.Len() != 0 {
 		t.Errorf("code = %d, stdout %q, stderr %q", code, out.String(), errOut.String())
 	}
@@ -595,6 +597,127 @@ func TestEventsReachTheAgent(t *testing.T) {
 	}
 }
 
+// eventMarkedCompact runs a session against the fake relay and reports whether
+// the event it delivers has the attribute compact.
+func eventMarkedCompact(t *testing.T, vars map[string]string, args ...string) bool {
+	t.Helper()
+
+	vars[tokenEnv] = sentinelValue
+	vars[endpointEnv] = fakeRelay(t)
+
+	running := startSession(t, env(vars), 0, args...)
+	running.handshake(t)
+	running.send(t, subscribeCall)
+	running.await(t, false, `"method":"notifications/claude/channel"`)
+
+	marked := strings.Contains(running.out.String(), `"compact":"true"`)
+
+	err := running.finish(t)
+	if err != nil {
+		t.Errorf("exit: %v", err)
+	}
+
+	return marked
+}
+
+func TestEventsAreCompactByDefault(t *testing.T) {
+	t.Parallel()
+
+	if !eventMarkedCompact(t, map[string]string{}) {
+		t.Error("the delivered event is not marked compact")
+	}
+}
+
+func TestFormatFullDeliversWholeEvents(t *testing.T) {
+	t.Parallel()
+
+	if eventMarkedCompact(t, map[string]string{}, "--format", "full") {
+		t.Error("the event is marked compact with --format full")
+	}
+}
+
+func TestFormatEnvironmentSetsTheFormat(t *testing.T) {
+	t.Parallel()
+
+	if eventMarkedCompact(t, map[string]string{formatEnv: formatFull}) {
+		t.Error("the event is marked compact with AWREL_FORMAT=full")
+	}
+}
+
+func TestFormatFlagBeatsEnvironment(t *testing.T) {
+	t.Parallel()
+
+	if !eventMarkedCompact(t, map[string]string{formatEnv: formatFull}, "--format", "compact") {
+		t.Error("the event is not marked compact with --format compact")
+	}
+}
+
+//nolint:dupl // two table tests of the same shape
+func TestResolveFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		env         map[string]string
+		name        string
+		flag        string
+		wantErr     string
+		wantCompact bool
+	}{
+		{nil, "default is compact", "", "", true},
+		{map[string]string{formatEnv: formatFull}, "env full over default", "", "", false},
+		{map[string]string{formatEnv: formatCompact}, "env compact", "", "", true},
+		{map[string]string{formatEnv: formatFull}, "flag compact over env", formatCompact, "", true},
+		{map[string]string{formatEnv: formatCompact}, "flag full over env", formatFull, "", false},
+		{nil, "bad flag", badFormat, `invalid format "brief": the value must be compact or full`, false},
+		{
+			map[string]string{formatEnv: "Full"},
+			"bad env",
+			"",
+			`invalid format "Full": the value must be compact or full`,
+			false,
+		},
+		{map[string]string{formatEnv: "bad"}, "a good flag ignores a bad env", formatFull, "", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := resolveFormat(test.flag, env(test.env))
+			if test.wantErr == "" {
+				if err != nil || got != test.wantCompact {
+					t.Errorf("resolveFormat = %v, %v; want %v", got, err, test.wantCompact)
+				}
+
+				return
+			}
+
+			if err == nil || err.Error() != test.wantErr || got || !errors.Is(err, errBadFormat) {
+				t.Errorf("resolveFormat = %v, %v; want error %q", got, err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestInvalidFormatExitsWithError(t *testing.T) {
+	t.Parallel()
+
+	var out, errOut bytes.Buffer
+
+	code := run([]string{mcpCommand, "--format", badFormat}, strings.NewReader(""), &out, &errOut, env(nil))
+	if code != 1 || out.Len() != 0 {
+		t.Errorf("with --format: code = %d, stdout %q", code, out.String())
+	}
+
+	if !strings.HasPrefix(errOut.String(), "Error: invalid format ") {
+		t.Errorf("stderr = %q", errOut.String())
+	}
+
+	code = run([]string{mcpCommand}, strings.NewReader(""), &out, &errOut, env(map[string]string{formatEnv: badFormat}))
+	if code != 1 || out.Len() != 0 {
+		t.Errorf("with AWREL_FORMAT: code = %d, stdout %q", code, out.String())
+	}
+}
+
 func TestSigtermStopsTheServer(t *testing.T) {
 	t.Parallel()
 
@@ -603,7 +726,7 @@ func TestSigtermStopsTheServer(t *testing.T) {
 	}
 
 	// The test binary itself, which runs main in the environment below.
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "mcp") //nolint:gosec // see above
+	cmd := exec.CommandContext(t.Context(), os.Args[0], mcpCommand) //nolint:gosec // see above
 	// GORACE keeps a race-enabled binary from sleeping a second before it exits.
 	cmd.Env = append(os.Environ(), mainEnv+"=1", tokenEnv+"=", tokenFileEnv+"=", "GORACE=atexit_sleep_ms=0")
 

@@ -1,0 +1,22 @@
+{
+  "action": "created",
+  "comment": {
+    "id": 900001,
+    "path": "internal/retry/retry.go",
+    "commit_id": "abc000000000000000000000000000000000002a",
+    "user": {
+      "login": "user-2"
+    },
+    "body": "Should this be capped before the shift?",
+    "html_url": "https://github.com/example-org/example-repo/pull/42#discussion_r900001",
+    "line": 12,
+    "in_reply_to_id": 900000
+  },
+  "pull_request": {
+    "number": 42,
+    "title": "Add exponential backoff to the retry loop"
+  },
+  "sender": {
+    "login": "user-2"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "action": "completed",
+  "workflow_job": {
+    "id": 430001,
+    "head_branch": "feat/backoff",
+    "run_attempt": 1,
+    "head_sha": "abc000000000000000000000000000000000002a",
+    "html_url": "https://github.com/example-org/example-repo/actions/runs/420001/job/430001",
+    "status": "completed",
+    "conclusion": "success",
+    "name": "test (ubuntu-latest)"
+  },
+  "sender": {
+    "login": "user-1"
+  }
+}

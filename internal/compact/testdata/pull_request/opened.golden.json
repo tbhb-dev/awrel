@@ -1,0 +1,42 @@
+{
+  "action": "opened",
+  "number": 42,
+  "pull_request": {
+    "html_url": "https://github.com/example-org/example-repo/pull/42",
+    "number": 42,
+    "state": "open",
+    "title": "Add exponential backoff to the retry loop",
+    "user": {
+      "login": "user-1"
+    },
+    "body": "## Summary\n\nThis change reworks how the example service retries failed requests. The previous loop retried immediately and could hammer the upstream.\n\n## Details\n\n- Add exponential backoff with jitter\n- Cap the delay at 30 seconds\n- Add tests for the cap and the jitter bounds\n\n## Testing\n\nRan the unit tests and the integration suite locally.\n",
+    "merged_at": null,
+    "merge_commit_sha": null,
+    "requested_reviewers": [
+      {
+        "login": "user-2"
+      }
+    ],
+    "labels": [
+      {
+        "name": "bug"
+      },
+      {
+        "name": "needs-review"
+      }
+    ],
+    "draft": false,
+    "head": {
+      "ref": "feat/backoff",
+      "sha": "abc000000000000000000000000000000000002a"
+    },
+    "base": {
+      "ref": "main",
+      "sha": "abc0000000000000000000000000000000000001"
+    },
+    "merged": false
+  },
+  "sender": {
+    "login": "user-1"
+  }
+}

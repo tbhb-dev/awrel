@@ -1,0 +1,25 @@
+{
+  "action": "completed",
+  "check_run": {
+    "id": 410001,
+    "name": "test",
+    "head_sha": "abc000000000000000000000000000000000002a",
+    "html_url": "https://github.com/example-org/example-repo/runs/410001",
+    "status": "completed",
+    "conclusion": "failure",
+    "check_suite": {
+      "id": 400001
+    },
+    "app": {
+      "slug": "github-actions"
+    },
+    "pull_requests": [
+      {
+        "number": 42
+      }
+    ]
+  },
+  "sender": {
+    "login": "user-1"
+  }
+}

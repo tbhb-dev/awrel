@@ -1,0 +1,21 @@
+{
+  "action": "created",
+  "issue": {
+    "html_url": "https://github.com/example-org/example-repo/pull/42",
+    "number": 42,
+    "title": "Add exponential backoff to the retry loop",
+    "state": "open",
+    "pull_request": true
+  },
+  "comment": {
+    "html_url": "https://github.com/example-org/example-repo/pull/42#issuecomment-950001",
+    "id": 950001,
+    "user": {
+      "login": "user-2"
+    },
+    "body": "Can you rebase onto main? The retry tests conflict."
+  },
+  "sender": {
+    "login": "user-2"
+  }
+}

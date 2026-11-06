@@ -1,0 +1,19 @@
+{
+  "ref": "refs/heads/feat/backoff",
+  "before": "abc0000000000000000000000000000000000001",
+  "after": "0000000000000000000000000000000000000000",
+  "pusher": {
+    "name": "user-1"
+  },
+  "sender": {
+    "login": "user-1"
+  },
+  "created": false,
+  "deleted": true,
+  "forced": false,
+  "base_ref": null,
+  "compare": "https://github.com/example-org/example-repo/compare/abc000000000...abc000000000",
+  "commits": [],
+  "commits_total": 0,
+  "head_commit": null
+}
