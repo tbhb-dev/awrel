@@ -7,10 +7,7 @@
     "private": true,
     "default_branch": "main"
   },
-  "pusher": {
-    "name": "user-1",
-    "email": "user-1@example.com"
-  },
+  "pusher": {},
   "organization": {
     "id": 2001
   },
@@ -36,16 +33,8 @@
       "distinct": true,
       "message": "feat: step 1\n\nLonger explanation of step 1 that the compact form drops.",
       "timestamp": "2026-11-05T08:01:00Z",
-      "author": {
-        "name": "User One",
-        "email": "user-1@example.com",
-        "username": "user-1"
-      },
-      "committer": {
-        "name": "User One",
-        "email": "user-1@example.com",
-        "username": "user-1"
-      },
+      "author": {},
+      "committer": {},
       "added": [
         "internal/retry/file1.go"
       ],
@@ -61,16 +50,8 @@
       "distinct": true,
       "message": "feat: step 2\n\nLonger explanation of step 2 that the compact form drops.",
       "timestamp": "2026-11-05T08:02:00Z",
-      "author": {
-        "name": "User One",
-        "email": "user-1@example.com",
-        "username": "user-1"
-      },
-      "committer": {
-        "name": "User One",
-        "email": "user-1@example.com",
-        "username": "user-1"
-      },
+      "author": {},
+      "committer": {},
       "added": [
         "internal/retry/file2.go"
       ],
@@ -86,16 +67,8 @@
       "distinct": true,
       "message": "feat: step 3\n\nLonger explanation of step 3 that the compact form drops.",
       "timestamp": "2026-11-05T08:03:00Z",
-      "author": {
-        "name": "User One",
-        "email": "user-1@example.com",
-        "username": "user-1"
-      },
-      "committer": {
-        "name": "User One",
-        "email": "user-1@example.com",
-        "username": "user-1"
-      },
+      "author": {},
+      "committer": {},
       "added": [
         "internal/retry/file3.go"
       ],
@@ -112,16 +85,8 @@
     "distinct": true,
     "message": "feat: step 3\n\nLonger explanation of step 3 that the compact form drops.",
     "timestamp": "2026-11-05T08:03:00Z",
-    "author": {
-      "name": "User One",
-      "email": "user-1@example.com",
-      "username": "user-1"
-    },
-    "committer": {
-      "name": "User One",
-      "email": "user-1@example.com",
-      "username": "user-1"
-    },
+    "author": {},
+    "committer": {},
     "added": [
       "internal/retry/file3.go"
     ],

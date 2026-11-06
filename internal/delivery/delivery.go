@@ -47,8 +47,8 @@ type Channel struct {
 
 // Options configure a Channel.
 type Options struct {
-	// Compact delivers the compact form of each payload, which keeps
-	// identifiers and state only, and marks the event with the attribute
+	// Compact delivers the compact form of each payload, a reduced selection
+	// of its fields, and marks the event with the attribute
 	// compact. Compaction runs before the size cap applies.
 	Compact bool
 }

@@ -108,6 +108,7 @@ noremote
 nosandbox
 nosystem
 owenlamont
+paralleltest
 perfsprint
 pflag
 pipefail

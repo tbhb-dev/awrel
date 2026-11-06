@@ -12,7 +12,7 @@
       }
     ],
     "app": {
-      "slug": "github-actions"
+      "slug": "example-app"
     }
   },
   "sender": {

@@ -11,7 +11,7 @@
       "id": 400001
     },
     "app": {
-      "slug": "github-actions"
+      "slug": "example-app"
     },
     "pull_requests": [
       {

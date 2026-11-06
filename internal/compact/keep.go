@@ -166,9 +166,13 @@ var keepLists = map[string]*keepList{
 
 // prepareCommits limits the commits of a push to `maxCommits`. It reduces each
 // to its `id` and the first line of its `message`, and adds `commits_total`
-// after them.
+// after them. A `commits_total` of the input goes from any position.
 func prepareCommits(root node) node {
 	return root.rewrite(func(entry member) []member {
+		if entry.key == "commits_total" {
+			return nil
+		}
+
 		if entry.key != "commits" || entry.val.kind != kindArray {
 			return []member{entry}
 		}

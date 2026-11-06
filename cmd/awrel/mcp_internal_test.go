@@ -656,33 +656,41 @@ func TestFormatFlagBeatsEnvironment(t *testing.T) {
 func TestResolveFormat(t *testing.T) {
 	t.Parallel()
 
+	const emptyFormatErr = `invalid format "": the value must be compact or full`
+
 	tests := []struct {
 		env         map[string]string
 		name        string
 		flag        string
 		wantErr     string
+		flagGiven   bool
 		wantCompact bool
 	}{
-		{nil, "default is compact", "", "", true},
-		{map[string]string{formatEnv: formatFull}, "env full over default", "", "", false},
-		{map[string]string{formatEnv: formatCompact}, "env compact", "", "", true},
-		{map[string]string{formatEnv: formatFull}, "flag compact over env", formatCompact, "", true},
-		{map[string]string{formatEnv: formatCompact}, "flag full over env", formatFull, "", false},
-		{nil, "bad flag", badFormat, `invalid format "brief": the value must be compact or full`, false},
+		{nil, "default is compact", "", "", false, true},
+		{map[string]string{formatEnv: formatFull}, "env full over default", "", "", false, false},
+		{map[string]string{formatEnv: formatCompact}, "env compact", "", "", false, true},
+		{map[string]string{formatEnv: formatFull}, "flag compact over env", formatCompact, "", true, true},
+		{map[string]string{formatEnv: formatCompact}, "flag full over env", formatFull, "", true, false},
+		{nil, "bad flag", badFormat, `invalid format "brief": the value must be compact or full`, true, false},
 		{
 			map[string]string{formatEnv: "Full"},
 			"bad env",
 			"",
 			`invalid format "Full": the value must be compact or full`,
 			false,
+			false,
 		},
-		{map[string]string{formatEnv: "bad"}, "a good flag ignores a bad env", formatFull, "", false},
+		{map[string]string{formatEnv: "bad"}, "a good flag ignores a bad env", formatFull, "", true, false},
+		{nil, "empty flag without env", "", emptyFormatErr, true, false},
+		{map[string]string{formatEnv: formatFull}, "empty flag beats a good env", "", emptyFormatErr, true, false},
+		{map[string]string{formatEnv: badFormat}, "empty flag beats a bad env", "", emptyFormatErr, true, false},
+		{map[string]string{formatEnv: ""}, "empty env is the default", "", "", false, true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := resolveFormat(test.flag, env(test.env))
+			got, err := resolveFormat(test.flag, test.flagGiven, env(test.env))
 			if test.wantErr == "" {
 				if err != nil || got != test.wantCompact {
 					t.Errorf("resolveFormat = %v, %v; want %v", got, err, test.wantCompact)
@@ -715,6 +723,26 @@ func TestInvalidFormatExitsWithError(t *testing.T) {
 	code = run([]string{mcpCommand}, strings.NewReader(""), &out, &errOut, env(map[string]string{formatEnv: badFormat}))
 	if code != 1 || out.Len() != 0 {
 		t.Errorf("with AWREL_FORMAT: code = %d, stdout %q", code, out.String())
+	}
+}
+
+func TestEmptyFormatFlagExitsWithError(t *testing.T) {
+	t.Parallel()
+
+	for _, environ := range []map[string]string{nil, {formatEnv: badFormat}, {formatEnv: formatFull}} {
+		var out, errOut bytes.Buffer
+
+		code := run([]string{mcpCommand, "--format="}, strings.NewReader(""), &out, &errOut, env(environ))
+		if code != 1 || out.Len() != 0 {
+			t.Errorf("env %v: code = %d, stdout %q", environ, code, out.String())
+		}
+
+		if want := `Error: invalid format "": the value must be compact or full`; !strings.HasPrefix(
+			errOut.String(),
+			want,
+		) {
+			t.Errorf("env %v: stderr = %q, want prefix %q", environ, errOut.String(), want)
+		}
 	}
 }
 

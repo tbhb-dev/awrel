@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,9 +27,9 @@ const (
 	eventPing        = "ping"
 	eventPullRequest = "pull_request"
 	eventIssues      = "issues"
-	eventPush        = "push"
 	nullJSON         = "null"
 	keepOne          = `{"keep":1}`
+	refOnly          = `{"ref":"r"}`
 )
 
 // A payload and the compact form it should have.
@@ -237,10 +238,133 @@ func TestParserEndsOnBadInput(t *testing.T) {
 		dec := json.NewDecoder(strings.NewReader(input))
 		dec.UseNumber()
 
-		got := render((&parser{dec: dec, limit: len(input)}).parse())
+		got := render((&parser{dec: dec, limit: len(input), budget: maxNodes, nodes: 0, over: false}).parse())
 		if len(got) > 10*len(input)+16 {
 			t.Errorf("%q parsed to %d bytes", input, len(got))
 		}
+	}
+}
+
+// bigArray is a body whose "unused" array has `count` zeros. The reproducer in
+// the review of #22 is one of 524,288, sent as a push.
+func bigArray(count int) json.RawMessage {
+	return json.RawMessage(`{"unused":[` + strings.Repeat("0,", count-1) + `0]}`)
+}
+
+// TestHostilePayloadFailsFast feeds the 1 MiB reproducer: half a million
+// values of two bytes each, which take about 250 MB to parse. Payload must
+// return ErrTooComplex after `maxNodes` values and take no more memory. The
+// test runs alone, so that no other test allocates while it counts.
+//
+//nolint:paralleltest // AllocsPerRun and MemStats count the whole process
+func TestHostilePayloadFailsFast(t *testing.T) {
+	payload := bigArray(524_288)
+	if len(payload) != 1_048_588 {
+		t.Fatalf("the reproducer has %d bytes", len(payload))
+	}
+
+	got, err := Payload(githubProvider, eventPush, payload)
+	if !errors.Is(err, ErrTooComplex) || got != nil {
+		t.Fatalf("Payload = %.40s, %v; want ErrTooComplex", got, err)
+	}
+
+	// Reading every value would take over 524,288 allocations.
+	allocs := testing.AllocsPerRun(1, func() {
+		_, _ = Payload(githubProvider, eventPush, payload) //nolint:errcheck // the error is checked above
+	})
+	if allocs > 2*maxNodes {
+		t.Errorf("%.0f allocations, want at most %d", allocs, 2*maxNodes)
+	}
+
+	// The bytes allocated are bounded by `maxNodes`, not by the input: a
+	// payload four times as large costs the same.
+	const ceiling = 128 << 20
+
+	for _, count := range []int{524_288, 4 * 524_288} {
+		var before, after runtime.MemStats
+
+		runtime.ReadMemStats(&before)
+
+		_, _ = Payload(githubProvider, eventPush, bigArray(count)) //nolint:errcheck // an error is the point
+
+		runtime.ReadMemStats(&after)
+
+		if used := after.TotalAlloc - before.TotalAlloc; used > ceiling {
+			t.Errorf("%d values allocated %d bytes, want at most %d", count, used, ceiling)
+		}
+	}
+}
+
+// TestPayloadAtTheLimit checks the count at the boundary: the array and its
+// items are values too.
+func TestPayloadAtTheLimit(t *testing.T) {
+	t.Parallel()
+
+	// The limit is written out so that a change to the constant fails the test.
+	const limit = 200_000
+
+	atLimit := bigArray(limit - 2) // the object, the array and the items
+
+	got, err := Payload(githubProvider, eventPing, atLimit)
+	if err != nil || len(got) != len(atLimit) {
+		t.Errorf("at the limit: %d bytes, %v", len(got), err)
+	}
+
+	_, err = Payload(githubProvider, eventPing, bigArray(limit-1))
+	if !errors.Is(err, ErrTooComplex) {
+		t.Errorf("one over the limit: %v", err)
+	}
+}
+
+func TestParserBudget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input  string
+		budget int
+		over   bool
+	}{
+		{`1`, 1, false},
+		{`1`, 0, true},
+		{`[1,2]`, 3, false},
+		{`[1,2]`, 2, true},
+		{`{"a":[true,null],"b":"s"}`, 5, false},
+		{`{"a":[true,null],"b":"s"}`, 4, true},
+	}
+	for _, test := range tests {
+		dec := json.NewDecoder(strings.NewReader(test.input))
+		dec.UseNumber()
+
+		read := &parser{dec: dec, limit: len(test.input), budget: test.budget, nodes: 0, over: false}
+		read.parse()
+
+		if read.over != test.over {
+			t.Errorf("%s with a budget of %d: over = %v, want %v", test.input, test.budget, read.over, test.over)
+		}
+	}
+}
+
+// TestGitIdentitiesOfAPush calls simplify to see the five paths that skip the
+// user reduction, since the keep-list of a push drops three of them after.
+func TestGitIdentitiesOfAPush(t *testing.T) {
+	t.Parallel()
+
+	identity := `{"name":"n","email":"e","username":"u"}`
+	payload := `{"pusher":` + identity + `,"sender":` + identity + `,` +
+		`"head_commit":{"author":` + identity + `,"committer":` + identity + `,"owner":` + identity + `},` +
+		`"commits":[{"author":` + identity + `,"committer":` + identity + `,"user":` + identity + `}]}`
+
+	dec := json.NewDecoder(strings.NewReader(payload))
+	dec.UseNumber()
+
+	tree := (&parser{dec: dec, limit: len(payload), budget: maxNodes, nodes: 0, over: false}).parse()
+	got := string(render(simplify(tree, "", "", pushIdentities)))
+	want := `{"pusher":` + identity + `,"sender":{},` +
+		`"head_commit":{"author":` + identity + `,"committer":` + identity + `,"owner":{}},` +
+		`"commits":[{"author":` + identity + `,"committer":` + identity + `,"user":{}}]}`
+
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }
 
@@ -362,9 +486,20 @@ func TestReductions(t *testing.T) {
 		{"deep", `{"a":{"user":` + user + `}}`, `{"a":{"user":` + want + `}}`},
 		{"login without a type", `{"user":{"login":"l","id":1}}`, `{"user":{"login":"l"}}`},
 		{
-			"git identity is not a user",
-			`{"pusher":{"name":"n","email":"e"},"author":{"name":"n","username":"u"}}`,
-			`{"pusher":{"name":"n","email":"e"},"author":{"name":"n","username":"u"}}`,
+			"a user without a login keeps its type",
+			`{"sender":{"type":"User","email":"example@example.com","id":1}}`,
+			`{"sender":{"type":"User"}}`,
+		},
+		{
+			"user, owner and reviewers without a login",
+			`{"user":{"type":"Bot","id":1},"owner":{"id":2,"type":"Organization"},` +
+				`"requested_reviewers":[{"type":"User","id":3},{"id":4}]}`,
+			`{"user":{"type":"Bot"},"owner":{"type":"Organization"},"requested_reviewers":[{"type":"User"},{}]}`,
+		},
+		{
+			"a name and an email are no user outside a push",
+			`{"pusher":{"name":"n","email":"e"},"author":{"name":"n","username":"u"},"committer":{"email":"e"}}`,
+			`{"pusher":{},"author":{},"committer":{}}`,
 		},
 		{
 			"user key with other values",
@@ -455,8 +590,9 @@ func TestStringCutInPayload(t *testing.T) {
 func TestUnknownProviderGetsTheGenericRules(t *testing.T) {
 	t.Parallel()
 
-	payload := `{"url":"u","ref":"r","other":1,"sender":{"login":"l","id":2}}`
-	want := `{"ref":"r","other":1,"sender":{"login":"l"}}`
+	payload := `{"url":"u","ref":"r","other":1,"sender":{"login":"l","id":2},` +
+		`"pusher":{"name":"n","email":"e"},"head_commit":{"author":{"name":"n","username":"u"}}}`
+	want := `{"ref":"r","other":1,"sender":{"login":"l"},"pusher":{},"head_commit":{"author":{}}}`
 
 	for _, provider := range []string{"gitlab", "", "GitHub"} {
 		got, err := Payload(provider, eventPush, json.RawMessage(payload))
@@ -671,7 +807,18 @@ func TestPushCommits(t *testing.T) {
 			`{"a":1,"commits":[],"ref":"r"}`,
 			`{"commits":[],"commits_total":0,"ref":"r"}`,
 		},
-		{"no commits member", `{"ref":"r"}`, `{"ref":"r"}`},
+		{"no commits member", refOnly, refOnly},
+		{
+			"a commits_total before commits is replaced",
+			`{"commits_total":999,"commits":[{"id":"c","message":"m"}]}`,
+			`{"commits":[{"id":"c","message":"m"}],"commits_total":1}`,
+		},
+		{
+			"a commits_total after commits is replaced",
+			`{"commits":[{"id":"c","message":"m"}],"commits_total":999}`,
+			`{"commits":[{"id":"c","message":"m"}],"commits_total":1}`,
+		},
+		{"a commits_total without commits goes", `{"commits_total":999,"ref":"r"}`, `{"ref":"r"}`},
 		{
 			"another array is left alone",
 			`{"parents":[{"id":"p","message":"a\nb"}],"commits":[]}`,

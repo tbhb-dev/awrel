@@ -36,7 +36,7 @@ Set `AWREL_CONNECT_TOKEN` to the connect token. If that variable is empty, `AWRE
 
 Start Claude Code with the development channels flag, or it drops the events. A payload over 64 KiB reaches the agent as a short note, with the attribute `truncated` set to `true`.
 
-By default the server delivers compact payloads, which keep identifiers and state only. A compact body has no API URLs, only the login of each user, and a selection of fields for each event. Events arrive with the attribute `compact` set to `true`, and the agent fetches details with `gh`. Compaction runs before the 64 KiB check, so most large pushes arrive. Pass `--format full` or set `AWREL_FORMAT=full` to get the whole payload. Either overrides the default of `compact`, and the flag takes precedence over the variable. See the documentation of the `internal/compact` package for the rules.
+By default the server delivers compact payloads, which reduce each payload to a selection of its fields. A compact body has no API URLs, only the login and type for each user, and can still include third-party text such as issue and comment bodies and commit messages. Events arrive with the attribute `compact` set to `true`, and the agent fetches details with `gh`. Compaction runs before the 64 KiB check, so most large pushes arrive. Pass `--format full` or set `AWREL_FORMAT=full` to get the whole payload. Either overrides the default of `compact`, and the flag takes precedence over the variable. See the documentation of the `internal/compact` package for the rules.
 
 Sessions in this repository use the staging relay through a pinned release in `.mcp.json`. They need Go and the staging token in `~/.config/awrel/stg-connect-token`:
 

@@ -13,7 +13,7 @@ type: Readme
 
 # Compact payload fixtures
 
-These files are synthetic placeholders: hand-built GitHub payload shapes with fake logins (`user-1`), fake IDs and `example-org/example-repo`. Scrubbed recordings from spike awrel/S-000001 replace them.
+These files are synthetic placeholders: hand-built GitHub payload shapes with fake logins (`user-1`), fake IDs, `example-org/example-repo` and the example app `example-app` (ID 1001). Scrubbed recordings from spike awrel/S-000001 replace them.
 
 ## Layout
 

@@ -75,15 +75,18 @@ func resolveEndpoint(flagValue string, getenv func(string) string) (string, erro
 }
 
 // resolveFormat returns whether events are delivered compact, from the flag,
-// else AWREL_FORMAT, else the default. The value is compact or full.
-func resolveFormat(flagValue string, getenv func(string) string) (bool, error) {
+// else AWREL_FORMAT, else the default. The value is compact or full. A flag
+// given on the command line takes precedence over the variable even when its
+// value is empty, and the empty value is then an error like any other that
+// isn't compact or full.
+func resolveFormat(flagValue string, flagChanged bool, getenv func(string) string) (bool, error) {
 	format := flagValue
-	if format == "" {
+	if !flagChanged {
 		format = getenv(formatEnv)
-	}
 
-	if format == "" {
-		format = defaultFormat
+		if format == "" {
+			format = defaultFormat
+		}
 	}
 
 	switch format {
@@ -169,7 +172,7 @@ func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTi
 				return err
 			}
 
-			compact, err := resolveFormat(formatFlag, getenv)
+			compact, err := resolveFormat(formatFlag, cmd.Flags().Changed("format"), getenv)
 			if err != nil {
 				return err
 			}

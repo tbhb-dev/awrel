@@ -42,9 +42,21 @@ type member struct {
 // decoder never fails on valid input. The loops over members and items run at
 // most `limit` times, the length of the input, which is more than any valid
 // array or object has. Bad input ends them instead of repeating forever.
+//
+// A node takes far more memory than the few bytes of input it can come from.
+// The parser counts the values it reads, and once the count passes `budget` it
+// stops reading and sets `over`.
 type parser struct {
-	dec   *json.Decoder
-	limit int
+	dec    *json.Decoder
+	limit  int
+	budget int
+	nodes  int
+	over   bool
+}
+
+// more reports whether the current array or object has another member to read.
+func (p *parser) more() bool {
+	return !p.over && p.dec.More()
 }
 
 // next reads one token. The decoder can't fail on valid input, so the error is
@@ -57,6 +69,14 @@ func (p *parser) next() json.Token {
 
 // parse reads one value.
 func (p *parser) parse() node {
+	p.nodes++
+	if p.nodes > p.budget {
+		p.over = true
+
+		// gomutants:disable-next-line RETURN_ZERO reason="the caller drops the tree once over is set"
+		return nullNode()
+	}
+
 	switch value := p.next().(type) {
 	case json.Delim:
 		if value == '{' {
@@ -71,15 +91,19 @@ func (p *parser) parse() node {
 	case bool:
 		return literal(strconv.FormatBool(value))
 	default:
-		return node{kind: kindNull, text: "null", members: nil, items: nil}
+		return nullNode()
 	}
+}
+
+func nullNode() node {
+	return node{kind: kindNull, text: "null", members: nil, items: nil}
 }
 
 func (p *parser) parseObject() node {
 	var members []member
 
 	for range p.limit {
-		if !p.dec.More() {
+		if !p.more() {
 			// gomutants:disable-next-line INVERT_LOOP_CTRL reason="More remains false, so continue only spins to the limit"
 			break
 		}
@@ -97,7 +121,7 @@ func (p *parser) parseArray() node {
 	var items []node
 
 	for range p.limit {
-		if !p.dec.More() {
+		if !p.more() {
 			// gomutants:disable-next-line INVERT_LOOP_CTRL reason="More remains false, so continue only spins to the limit"
 			break
 		}
@@ -194,11 +218,6 @@ func (value node) rewrite(rewriter func(member) []member) node {
 	}
 
 	return node{kind: kindObject, text: "", members: members, items: nil}
-}
-
-// has reports whether `value` is an object with a member named `key`.
-func (value node) has(key string) bool {
-	return slices.ContainsFunc(value.members, func(entry member) bool { return entry.key == key })
 }
 
 // pick keeps the members of an object whose keys are listed.
