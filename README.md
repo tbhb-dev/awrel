@@ -4,6 +4,8 @@ awrel relays webhooks from providers such as GitHub to coding agents. A Cloudfla
 
 ## Development
 
+Run `tbhbdev alpha install` once per machine to install the user-level harness hooks. Each session start then installs the clone's git hooks.
+
 Bazel pins and runs every gate. [mise](https://mise.jdx.dev) only installs `bazelisk` and `uv`, pinned in `mise.toml` and locked in `mise.lock`. Run every gate with:
 
 ```sh
