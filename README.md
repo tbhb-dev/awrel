@@ -14,6 +14,8 @@ bazelisk test //...
 
 `bazelisk run //:format` formats the tree in place, and `bazelisk run //:bazel_env` builds the shims for the pinned tools in `.bazel_env/bin`. Docs are in [docs/](docs/index.md).
 
+- `mise run pr` runs `tbhbdev alpha pr`, which checks `.github/PULL_REQUEST_DRAFT.md` and opens or edits the PR from it, and `mise run merge` runs `tbhbdev alpha merge`, which squash-merges an approved PR. The deny rules in `.claude/settings.json` and `.codex/rules/` block `gh pr create`, `gh pr edit` and `gh pr merge`.
+
 ## Running the server
 
 The `awrel mcp` command speaks MCP over stdio, and it holds the connection to the relay. Matching events go to the agent. The agent manages its subscriptions with `subscribe`, `unsubscribe` and `list_subscriptions`. Add the server to the MCP configuration of the agent:
