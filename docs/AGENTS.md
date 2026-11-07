@@ -18,7 +18,7 @@ Describe what the system is and does. Leave history and decision rationale to de
 
 ## Authorship fields
 
-Fill `generated` from your own identity, with one entry per contributor. Its fields match the attributes of the `Generated-by` and `Assisted-by` commit trailers. Leave out a field you can't determine reliably instead of guessing it. Set `at` to the time of your last change, in Coordinated Universal Time with a `Z` suffix. When you change a doc another contributor wrote, add your own entry and keep the existing ones.
+Fill `generated` from your own identity, with one entry per contributor. Its fields match the attributes of the `Generated-by` and `Assisted-by` commit trailers. Leave out a field you can't determine reliably instead of guessing it. Set `at` to the time of your last change, in Coordinated Universal Time with a `Z` suffix. `generated` lists only the contributors of the latest commit to change the doc, and each change replaces the list. The file's git history records earlier contributors.
 
 Never write `verified`. Only a human adds it, after reading the doc.
 
