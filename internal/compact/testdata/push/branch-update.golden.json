@@ -22,7 +22,7 @@
   "commits_total": 1,
   "head_commit": {
     "id": "23fc28426f7827a91e5bb0dc29bac1290894d0fc",
-    "message": "chore: drop the interim harness hooks\n\nSigned-off-by: user-2 <user-2@example.invalid>\nGenerated-by: LLM harness=codex:0.164.0;session=sha-256-64:64afb6dd2eba0b15",
+    "message": "chore: drop the interim harness hooks\n\nSigned-off-by: user-1 <user-1@example.invalid>\nGenerated-by: LLM harness=codex:0.164.0;session=sha-256-64:64afb6dd2eba0b15",
     "timestamp": "2026-11-06T21:33:00-05:00",
     "author": {
       "username": "user-1"

@@ -13,9 +13,9 @@ type: Readme
 
 # Compact payload fixtures
 
-Most fixtures are recordings from spike awrel/S-000001, taken from a 24-hour stg capture. The spike scrubbed them and put pseudonyms in place of logins, IDs, and repositories. Each recording is the one nearest the median size for its event and action.
+Most fixtures are recordings from spike awrel/S-000001, taken from a 24-hour stg capture. Spike scrubbing turned logins and people into pseudonyms, `user-N` for people and `app-bot-N` for apps, and gave one person one pseudonym across all recordings. Public values stay real: the repository `tbhb-dev/awrel` and its commit and tree SHAs. IDs, node IDs and `external_id` are fake but consistent. Each recording is the one nearest the median size for its event and action.
 
-The capture has nothing for `issue_comment`, `ping`, or `pull_request_review_comment`. Those events keep their synthetic placeholders, hand-built shapes with fake logins (`user-1`), fake IDs, `example-org/example-repo`, and the example app `example-app` (ID 1001). Fixtures of other providers are synthetic too.
+Synthetic placeholders cover `issue_comment`, `ping`, and `pull_request_review_comment`, which the capture lacks. They're hand-built shapes with fake logins (`user-1`, `user-2`), fake IDs, and `example-org/example-repo`. `push/example-provider` is synthetic as well, a push of another provider. In the synthetic fixtures `user-1` and `user-2` are two different people, which has nothing to do with the pseudonyms of the recordings.
 
 ## Layout
 
