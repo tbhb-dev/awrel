@@ -12,7 +12,7 @@ export default {
   // mutant runs every test.
   coverageAnalysis: "all",
   mutate: ["src/**/*.ts", "!src/**/*.test.ts", "!src/testing.ts"],
-  concurrency: 1,
+  concurrency: 2,
   thresholds: { high: 100, low: 100, break: 100 },
   reporters: ["clear-text"],
 };

@@ -432,7 +432,7 @@ workers_stryker_test(
     srcs = WORKER,
     node_modules = [":node_modules"],
     tags = [
-        "cpu:1",
+        "cpu:2",
         "worker",
     ],
 )
