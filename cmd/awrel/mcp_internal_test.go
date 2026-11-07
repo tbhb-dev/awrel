@@ -432,14 +432,14 @@ func TestMissingSettingFailsEveryTool(t *testing.T) {
 			stderr: "AWREL_CONNECT_TOKEN",
 		},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			running := startSession(t, env(tc.vars), 0)
+			running := startSession(t, env(test.vars), 0)
 			out := running.askAll(t)
 
-			if strings.Count(out, tc.want) != 3 || !strings.Contains(running.errOut.String(), tc.stderr) {
+			if strings.Count(out, test.want) != 3 || !strings.Contains(running.errOut.String(), test.stderr) {
 				t.Errorf("stdout:\n%s\nstderr:\n%s", out, running.errOut.String())
 			}
 
