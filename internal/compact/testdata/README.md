@@ -13,7 +13,9 @@ type: Readme
 
 # Compact payload fixtures
 
-These files are synthetic placeholders: hand-built GitHub payload shapes with fake logins (`user-1`), fake IDs, `example-org/example-repo` and the example app `example-app` (ID 1001). Scrubbed recordings from spike awrel/S-000001 replace them.
+Most fixtures are recordings from spike awrel/S-000001, taken from a 24-hour stg capture. The spike scrubbed them and put pseudonyms in place of logins, IDs, and repositories. Each recording is the one nearest the median size for its event and action.
+
+The capture has nothing for `issue_comment`, `ping`, or `pull_request_review_comment`. Those events keep their synthetic placeholders, hand-built shapes with fake logins (`user-1`), fake IDs, `example-org/example-repo`, and the example app `example-app` (ID 1001). Fixtures of other providers are synthetic too.
 
 ## Layout
 
@@ -33,4 +35,4 @@ Run the test with `-update` from the repository root, then read the diff of the 
 go test ./internal/compact -run TestGolden -update
 ```
 
-The size test logs the input and output size of each fixture. It asserts a reduction for the `push` and `pull_request` events only, because the other fixtures are small, and a recording may differ.
+The size test logs the input and output size of each fixture. It asserts a reduction for every GitHub fixture.

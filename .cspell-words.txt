@@ -56,7 +56,9 @@ gofrs
 gofumpt
 goheader
 golangci
+gollum
 golines
+gomod
 gomodguard
 gomutants
 goproxy
@@ -117,6 +119,7 @@ ppid
 prek
 pretooluse
 pylock
+rebaseable
 recvcheck
 relayclient
 rollouts

@@ -1,0 +1,25 @@
+{
+  "action": "submitted",
+  "review": {
+    "id": 9999999971,
+    "user": {
+      "login": "user-3"
+    },
+    "body": null,
+    "commit_id": "X000002770000000000000000000000000000000",
+    "state": "approved",
+    "html_url": "https://github.com/tbhb-dev/awrel/pull/24#pullrequestreview-9999999971",
+    "submitted_at": "2026-11-06T07:23:50Z"
+  },
+  "pull_request": {
+    "html_url": "https://github.com/tbhb-dev/awrel/pull/24",
+    "number": 24,
+    "title": "chore(deps): update tbhb_rules to 77625ef",
+    "head": {
+      "sha": "b8dec7273474dfe0b4060d56b03b87162ef41203"
+    }
+  },
+  "sender": {
+    "login": "user-3"
+  }
+}

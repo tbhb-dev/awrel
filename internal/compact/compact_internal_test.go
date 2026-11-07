@@ -196,8 +196,6 @@ func TestGolden(t *testing.T) {
 func TestSize(t *testing.T) {
 	t.Parallel()
 
-	large := map[string]bool{eventPush: true, eventPullRequest: true}
-
 	for _, fix := range fixtures(t) {
 		t.Run(fix.name, func(t *testing.T) {
 			t.Parallel()
@@ -211,7 +209,7 @@ func TestSize(t *testing.T) {
 
 			t.Logf("%s: %d -> %d bytes", fix.name, len(input), len(got))
 
-			if large[fix.event] && fix.provider == githubProvider && len(got) >= len(input) {
+			if fix.provider == githubProvider && len(got) >= len(input) {
 				t.Errorf("output of %d bytes is not smaller than the input of %d", len(got), len(input))
 			}
 		})
