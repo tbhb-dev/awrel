@@ -110,6 +110,8 @@ func channelParams(event protocol.Event, compacted bool) json.RawMessage {
 
 	if len(payload) > maxContentBytes {
 		meta["truncated"] = "true"
+		// The note replaces the body, so no compact payload is delivered.
+		delete(meta, "compact")
 		content = tooLargeNote(event, action, len(payload))
 	}
 

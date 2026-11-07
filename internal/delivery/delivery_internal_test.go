@@ -344,7 +344,7 @@ func TestCompactChannelStillOverCapGetsNote(t *testing.T) {
 		t.Errorf("content = %q, want %q", got.Content, want)
 	}
 
-	wantMeta := metaOf(pingEvent, "d4", "action", "opened", "truncated", "true", "compact", "true")
+	wantMeta := metaOf(pingEvent, "d4", "action", "opened", "truncated", "true")
 	if !maps.Equal(got.Meta, wantMeta) {
 		t.Errorf("meta = %v, want %v", got.Meta, wantMeta)
 	}
