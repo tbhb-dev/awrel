@@ -409,38 +409,45 @@ func TestInvalidEndpointExitsWithError(t *testing.T) {
 	}
 }
 
-func TestMissingEndpointFailsEveryTool(t *testing.T) {
+func TestMissingSettingFailsEveryTool(t *testing.T) {
 	t.Parallel()
 
-	// The token is set, so only the endpoint can fail the tools.
-	running := startSession(t, env(map[string]string{tokenEnv: sentinelValue}), 0)
-	out := running.askAll(t)
-
-	want := "not connected to the relay: no relay endpoint set"
-	if strings.Count(out, want) != 3 || !strings.Contains(running.errOut.String(), "no relay endpoint") {
-		t.Errorf("stdout:\n%s\nstderr:\n%s", out, running.errOut.String())
+	tests := []struct {
+		name   string
+		vars   map[string]string
+		want   string
+		stderr string
+	}{
+		// Each case sets the other setting, so only the missing one can fail the tools.
+		{
+			name:   "endpoint",
+			vars:   map[string]string{tokenEnv: sentinelValue},
+			want:   "not connected to the relay: no relay endpoint set",
+			stderr: "no relay endpoint",
+		},
+		{
+			name:   "token",
+			vars:   map[string]string{endpointEnv: unreachable},
+			want:   "not connected to the relay: neither AWREL_CONNECT_TOKEN nor AWREL_CONNECT_TOKEN_FILE is set",
+			stderr: "AWREL_CONNECT_TOKEN",
+		},
 	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	err := running.finish(t)
-	if err != nil {
-		t.Errorf("exit: %v", err)
-	}
-}
+			running := startSession(t, env(tc.vars), 0)
+			out := running.askAll(t)
 
-func TestMissingTokenFailsEveryTool(t *testing.T) {
-	t.Parallel()
+			if strings.Count(out, tc.want) != 3 || !strings.Contains(running.errOut.String(), tc.stderr) {
+				t.Errorf("stdout:\n%s\nstderr:\n%s", out, running.errOut.String())
+			}
 
-	running := startSession(t, env(map[string]string{endpointEnv: unreachable}), 0)
-	out := running.askAll(t)
-
-	want := "not connected to the relay: neither AWREL_CONNECT_TOKEN nor AWREL_CONNECT_TOKEN_FILE is set"
-	if strings.Count(out, want) != 3 || !strings.Contains(running.errOut.String(), "AWREL_CONNECT_TOKEN") {
-		t.Errorf("stdout:\n%s\nstderr:\n%s", out, running.errOut.String())
-	}
-
-	err := running.finish(t)
-	if err != nil {
-		t.Errorf("exit: %v", err)
+			err := running.finish(t)
+			if err != nil {
+				t.Errorf("exit: %v", err)
+			}
+		})
 	}
 }
 
