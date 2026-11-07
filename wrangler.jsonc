@@ -5,9 +5,9 @@
 // deployment. To run your own relay, replace them with yours, as
 // docs/how-to/self-host.md describes.
 //
-// The Worker in each environment. The ops repository's OpenTofu owns the
-// custom domains (awrel-stg.tbhb.dev and awrel.tbhb.dev), so wrangler
-// manages no routes and serves nothing on workers.dev. RELAY is the
+// The Worker in each environment. The maintainers manage the custom
+// domains (awrel-stg.tbhb.dev and awrel.tbhb.dev) outside wrangler, so
+// wrangler manages no routes and serves nothing on workers.dev. RELAY is the
 // SQLite-backed Durable Object that the Worker hands webhook events and MCP
 // connections to; its migrations deploy with the script. CF_VERSION_METADATA
 // gives the Worker its version id, which it returns on every response so the

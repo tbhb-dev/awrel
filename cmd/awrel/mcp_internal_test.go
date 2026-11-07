@@ -230,7 +230,7 @@ func TestResolveEndpoint(t *testing.T) {
 	}{
 		{"none", "", nil, "", "no relay endpoint set: pass --endpoint or set AWREL_ENDPOINT"},
 		{
-			"env over default",
+			"env",
 			"",
 			map[string]string{endpointEnv: envURL},
 			envURL,

@@ -3,12 +3,11 @@ description: The messages that the awrel server and the relay Durable Object exc
 generated:
   - role: generated
     harness: claude-code:2.1.319
-    model: anthropic:claude-sonnet-5-5
+    model: anthropic:claude-opus-5-5
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    subagent: sha-256-64:e2410b981f99f96e
-    at: "2026-11-07T22:32:14Z"
+    at: "2026-11-07T22:35:18Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
