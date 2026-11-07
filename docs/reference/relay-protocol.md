@@ -2,20 +2,12 @@
 description: The messages that the awrel server and the relay Durable Object exchange over the /connect WebSocket.
 generated:
   - role: generated
-    harness: claude-code:2.1.318
-    model: anthropic:claude-sonnet-5-5
-    effort: medium
-    surface: cli
-    session: sha-256-64:dc0c7bb9a6fc4839
-    subagent: sha-256-64:c6786fca249ea845
-    at: "2026-11-04T03:24:55Z"
-  - role: assisted
-    harness: claude-code:2.1.318
+    harness: claude-code:2.1.319
     model: anthropic:claude-opus-5-5
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-04T03:24:55Z"
+    at: "2026-11-07T22:35:18Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -28,7 +20,7 @@ The awrel Model Context Protocol (MCP) server and the relay Durable Object excha
 
 ## Handshake
 
-The client opens `GET /connect` (`wss://awrel.tbhb.dev/connect` in prd, `wss://awrel-stg.tbhb.dev/connect` in stg) with `Authorization: Bearer <CONNECT_TOKEN>` (the word Bearer is case-sensitive) and `Sec-WebSocket-Protocol: awrel.v1`. A 401 means the token doesn't match, a 426 means `Upgrade: websocket` is missing, and a 400 means `awrel.v1` isn't offered. On success the Durable Object answers 101 with `Sec-WebSocket-Protocol: awrel.v1`, after accepting the socket with the hibernatable API and setting the attachment to `{"subscriptions":[]}`. Because the subprotocol name is the protocol version, a breaking change adds `awrel.v2` while `awrel.v1` stays served until no client uses it. Every HTTP answer from the Worker, the 101 included, carries an `Awrel-Worker-Version` header, and an answer from the edge, such as an edge 404, doesn't. A client uses the header to tell the edge from the Worker.
+The client opens `GET /connect` (`wss://<relay-host>/connect`) with `Authorization: Bearer <CONNECT_TOKEN>` (the word Bearer is case-sensitive) and `Sec-WebSocket-Protocol: awrel.v1`. A 401 means the token doesn't match, a 426 means `Upgrade: websocket` is missing, and a 400 means `awrel.v1` isn't offered. On success the Durable Object answers 101 with `Sec-WebSocket-Protocol: awrel.v1`, after accepting the socket with the hibernatable API and setting the attachment to `{"subscriptions":[]}`. Because the subprotocol name is the protocol version, a breaking change adds `awrel.v2` while `awrel.v1` stays served until no client uses it. Every HTTP answer from the Worker, the 101 included, carries an `Awrel-Worker-Version` header, and an answer from the edge, such as an edge 404, doesn't. A client uses the header to tell the edge from the Worker.
 
 Every message is one JSON text frame. A client message is at most 4096 bytes, and a larger one gets a `bad_message` reply. The server ignores unknown fields in a client message of a known type. It answers a binary frame with `bad_message` and a null `id`, and keeps the socket open.
 

@@ -27,17 +27,17 @@ import (
 )
 
 const (
-	defaultEndpoint = "wss://awrel.tbhb.dev/connect"
-	endpointEnv     = "AWREL_ENDPOINT"
-	formatEnv       = "AWREL_FORMAT"
-	formatCompact   = "compact"
-	formatFull      = "full"
-	defaultFormat   = formatCompact
-	tokenEnv        = "AWREL_CONNECT_TOKEN"      //nolint:gosec // a variable name, not a credential
-	tokenFileEnv    = "AWREL_CONNECT_TOKEN_FILE" //nolint:gosec // a variable name, not a credential
+	endpointEnv   = "AWREL_ENDPOINT"
+	formatEnv     = "AWREL_FORMAT"
+	formatCompact = "compact"
+	formatFull    = "full"
+	defaultFormat = formatCompact
+	tokenEnv      = "AWREL_CONNECT_TOKEN"      //nolint:gosec // a variable name, not a credential
+	tokenFileEnv  = "AWREL_CONNECT_TOKEN_FILE" //nolint:gosec // a variable name, not a credential
 )
 
 var (
+	errNoEndpoint     = errors.New("no relay endpoint set: pass --endpoint or set " + endpointEnv)
 	errNoToken        = errors.New("neither " + tokenEnv + " nor " + tokenFileEnv + " is set")
 	errEmptyTokenFile = errors.New("is empty")
 	errBadEndpoint    = errors.New("invalid endpoint")
@@ -47,7 +47,7 @@ var (
 )
 
 // resolveEndpoint returns the relay URL from the flag, else AWREL_ENDPOINT,
-// else the default. The URL must be a WebSocket URL with a host.
+// else errNoEndpoint. A URL must be a WebSocket URL with a host.
 func resolveEndpoint(flagValue string, getenv func(string) string) (string, error) {
 	endpoint := flagValue
 	if endpoint == "" {
@@ -55,7 +55,7 @@ func resolveEndpoint(flagValue string, getenv func(string) string) (string, erro
 	}
 
 	if endpoint == "" {
-		endpoint = defaultEndpoint
+		return "", errNoEndpoint
 	}
 
 	parsed, err := url.Parse(endpoint)
@@ -128,7 +128,7 @@ func resolveToken(getenv func(string) string) (string, error) {
 	return token, nil
 }
 
-// unconnectedRelay is the Relay of a server that has no token. Every tool
+// unconnectedRelay is the Relay of a server that has no endpoint or token. Every tool
 // fails with the reason.
 type unconnectedRelay struct {
 	err error
@@ -168,7 +168,10 @@ func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTi
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			endpoint, err := resolveEndpoint(endpointFlag, getenv)
-			if err != nil {
+			// Like a missing token, a missing endpoint doesn't stop the
+			// server. The endpoint is then empty and connectRelay fails
+			// every tool with errNoEndpoint.
+			if err != nil && !errors.Is(err, errNoEndpoint) {
 				return err
 			}
 
@@ -181,7 +184,7 @@ func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTi
 		},
 	}
 	cmd.Flags().
-		StringVar(&endpointFlag, "endpoint", "", "relay URL (default $"+endpointEnv+", then "+defaultEndpoint+")")
+		StringVar(&endpointFlag, "endpoint", "", "relay URL, required (default $"+endpointEnv+")")
 	cmd.Flags().
 		StringVar(&formatFlag, "format", "", "event payloads: "+formatCompact+" or "+formatFull+
 			" (default $"+formatEnv+", then "+defaultFormat+")")
@@ -239,8 +242,8 @@ func serveMCP(
 }
 
 // connectRelay returns the Relay for the tools and the function that keeps its
-// connection. Without a token the Relay fails every call and the function
-// returns at once.
+// connection. If the endpoint or the token is missing, the Relay fails every call and the
+// function returns at once.
 //
 //nolint:ireturn // the tools take the Relay interface
 func connectRelay(
@@ -251,6 +254,12 @@ func connectRelay(
 	requestTimeout time.Duration,
 	onEvent func(context.Context, protocol.Event),
 ) (mcpserver.Relay, func(context.Context)) {
+	if endpoint == "" {
+		logger.ErrorContext(ctx, "no relay endpoint; every tool will fail", "error", errNoEndpoint)
+
+		return unconnectedRelay{err: errNoEndpoint}, func(context.Context) {}
+	}
+
 	token, err := resolveToken(getenv)
 	if err != nil {
 		logger.ErrorContext(ctx, "no relay token; every tool will fail", "error", err)
