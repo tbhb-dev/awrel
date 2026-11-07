@@ -1,0 +1,35 @@
+{
+  "action": "synchronize",
+  "number": 30,
+  "pull_request": {
+    "html_url": "https://github.com/tbhb-dev/awrel/pull/30",
+    "number": 30,
+    "state": "open",
+    "title": "chore: replace tools/interim with the tbhbdev alpha commands",
+    "user": {
+      "login": "user-1"
+    },
+    "body": "## Why\n\n@user-3 decided to retire the interim agent tooling from every repository. This repository still used its copied scripts for PR tasks and documentation attribution, even though the tbhbdev alpha commands provide those operations.\n\n## Behavior change\n\n`mise run pr` runs `tbhbdev alpha pr`, and `mise run merge` runs `tbhbdev alpha merge`. The documentation attribution hook runs `tbhbdev alpha identity stamp-docs`. This removes the copied scripts and their Python dependencies. The deny rules for `gh pr create`, `gh pr edit` and `gh pr merge` stay in place.\n\n## Decisions\n\nChose the installed tbhbdev alpha commands over repository copies because @user-3 directed the retirement of the interim tooling. Kept the OS constraints and the tools directory because the Windows workspace status test, Bazel tool shims and Go lint rules still use them. Added root agent instructions because this repository had instructions only for documentation.\n\n## Needs human judgment\n\nMaintainers should confirm that contributors have `tbhbdev` on PATH before merging.\n\n## Risk\n\nThe PR tasks and documentation attribution hook now require `tbhbdev` on PATH. Existing clones with git hooks that call the deleted scripts must run `tbhbdev alpha install` to replace those hooks.\n\n## Verification\n\n```text\n$ bazelisk test //...\nExecuted 20 out of 48 tests: 47 tests pass and 1 was skipped.\n$ bazelisk run //:format\nformat: ok\n$ mise run pr -- check\n[pr] $ tbhbdev alpha pr check\nOK: the draft conforms\n```\n\nThe skipped test requires Windows. The commit passed the pre-commit and commit-message hooks, including documentation attribution. The full rerun passed after correcting a prose lint finding and an interrupted Bazel server. `mise.lock` and the deny rules are unchanged.\n\nGenerated-by: LLM harness=codex:0.164.0;session=sha-256-64:8c3175df7e996713\n",
+    "merged_at": null,
+    "merge_commit_sha": "30c92798906c89012f1082f5a9c45d6a6fa55263",
+    "requested_reviewers": [
+      {
+        "login": "user-3"
+      }
+    ],
+    "labels": [],
+    "draft": false,
+    "head": {
+      "ref": "chore/tbhbdev-alpha",
+      "sha": "307f8c4852a38a3cf61e6a1ef299d1eb217fdead"
+    },
+    "base": {
+      "ref": "main",
+      "sha": "3c9c925fcd4d6c5389d38b9b597ed2ff5dac063a"
+    },
+    "merged": false
+  },
+  "sender": {
+    "login": "user-1"
+  }
+}

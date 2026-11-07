@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"go.tbhb.dev/awrel/internal/compact"
 	"go.tbhb.dev/awrel/internal/protocol"
 )
 
@@ -41,16 +42,25 @@ type Deliverer interface {
 // short note, because the agent reads the whole body.
 type Channel struct {
 	notifier Notifier
+	compact  bool
+}
+
+// Options configure a Channel.
+type Options struct {
+	// Compact delivers the compact form of each payload, a reduced selection
+	// of its fields, and marks the event with the attribute
+	// compact. Compaction runs before the size cap applies.
+	Compact bool
 }
 
 // NewChannel returns a Channel that sends through n.
-func NewChannel(n Notifier) *Channel {
-	return &Channel{notifier: n}
+func NewChannel(n Notifier, opts Options) *Channel {
+	return &Channel{notifier: n, compact: opts.Compact}
 }
 
 // Deliver sends event as one channel notification.
 func (c *Channel) Deliver(ctx context.Context, event protocol.Event) error {
-	err := c.notifier.Notify(ctx, ChannelMethod, channelParams(event))
+	err := c.notifier.Notify(ctx, ChannelMethod, channelParams(event, c.compact))
 	if err != nil {
 		return fmt.Errorf("send channel notification: %w", err)
 	}
@@ -66,7 +76,10 @@ type channelParameters struct {
 
 // channelParams builds the params of the notification for event. The content is
 // the payload's JSON text, or a note when the payload is over maxContentBytes.
-func channelParams(event protocol.Event) json.RawMessage {
+// With `compacted` set, the payload is compacted first, and the note covers
+// whatever is still too large. A payload that can't be compacted goes whole, without the
+// attribute compact.
+func channelParams(event protocol.Event, compacted bool) json.RawMessage {
 	action := payloadAction(event.Payload)
 
 	meta := map[string]string{
@@ -83,11 +96,24 @@ func channelParams(event protocol.Event) json.RawMessage {
 		meta["action"] = action
 	}
 
-	content := string(event.Payload)
+	payload := event.Payload
 
-	if len(event.Payload) > maxContentBytes {
+	if compacted {
+		small, err := compact.Payload(event.Provider, event.Event, payload)
+		if err == nil {
+			payload = small
+			meta["compact"] = "true"
+		}
+	}
+
+	content := string(payload)
+
+	if len(payload) > maxContentBytes {
 		meta["truncated"] = "true"
-		content = tooLargeNote(event, action)
+		// The note replaces the body, so no compact payload is delivered.
+		delete(meta, "compact")
+
+		content = tooLargeNote(event, action, len(payload))
 	}
 
 	return mustMarshal(channelParameters{Content: content, Meta: meta})
@@ -110,8 +136,9 @@ func payloadAction(payload json.RawMessage) string {
 	return parsed.Action
 }
 
-// tooLargeNote describes an event whose payload is too large to deliver.
-func tooLargeNote(event protocol.Event, action string) string {
+// tooLargeNote describes an event whose payload, of size bytes as delivered, is
+// too large to deliver.
+func tooLargeNote(event protocol.Event, action string, size int) string {
 	note := fmt.Sprintf("%s event %q", event.Provider, event.Event)
 
 	if action != "" {
@@ -125,7 +152,7 @@ func tooLargeNote(event protocol.Event, action string) string {
 	return note + fmt.Sprintf(
 		", delivery %s. The payload is %d bytes, too large to deliver. "+
 			"Fetch the details from the provider with its API or CLI.",
-		event.Delivery, len(event.Payload),
+		event.Delivery, size,
 	)
 }
 

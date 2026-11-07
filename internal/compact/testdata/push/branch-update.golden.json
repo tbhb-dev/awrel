@@ -1,0 +1,31 @@
+{
+  "ref": "refs/heads/chore/drop-interim-hooks",
+  "before": "0000000000000000000000000000000000000000",
+  "after": "23fc28426f7827a91e5bb0dc29bac1290894d0fc",
+  "pusher": {
+    "name": "user-1"
+  },
+  "forced": false,
+  "sender": {
+    "login": "user-1"
+  },
+  "created": true,
+  "deleted": false,
+  "base_ref": null,
+  "compare": "https://github.com/tbhb-dev/awrel/commit/23fc28426f78",
+  "commits": [
+    {
+      "id": "23fc28426f7827a91e5bb0dc29bac1290894d0fc",
+      "message": "chore: drop the interim harness hooks"
+    }
+  ],
+  "commits_total": 1,
+  "head_commit": {
+    "id": "23fc28426f7827a91e5bb0dc29bac1290894d0fc",
+    "message": "chore: drop the interim harness hooks\n\nSigned-off-by: user-1 <user-1@example.invalid>\nGenerated-by: LLM harness=codex:0.164.0;session=sha-256-64:64afb6dd2eba0b15",
+    "timestamp": "2026-11-06T21:33:00-05:00",
+    "author": {
+      "username": "user-1"
+    }
+  }
+}

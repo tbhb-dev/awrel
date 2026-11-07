@@ -1,0 +1,37 @@
+{
+  "zen": "Keep it logically awesome.",
+  "hook_id": 12345,
+  "hook": {
+    "type": "App",
+    "id": 12345,
+    "active": true,
+    "events": [
+      "push",
+      "pull_request"
+    ],
+    "config": {
+      "content_type": "json",
+      "insecure_ssl": "0"
+    },
+    "updated_at": "2026-11-05T08:00:00Z",
+    "app_id": 9001
+  },
+  "repository": {
+    "full_name": "example-org/example-repo",
+    "private": true,
+    "default_branch": "main"
+  },
+  "organization": {
+    "id": 2001
+  },
+  "enterprise": {
+    "id": 77
+  },
+  "sender": {
+    "login": "user-1",
+    "type": "User"
+  },
+  "installation": {
+    "id": 9001
+  }
+}

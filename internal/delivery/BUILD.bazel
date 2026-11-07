@@ -11,7 +11,10 @@ go_library(
     srcs = ["delivery.go"],
     importpath = "go.tbhb.dev/awrel/internal/delivery",
     visibility = ["//:__subpackages__"],
-    deps = ["//internal/protocol"],
+    deps = [
+        "//internal/compact",
+        "//internal/protocol",
+    ],
 )
 
 go_test(
@@ -20,5 +23,8 @@ go_test(
     embed = [":delivery"],
     # The whole-module Go checks in the root package take the tests too.
     visibility = ["//:__pkg__"],
-    deps = ["//internal/protocol"],
+    deps = [
+        "//internal/compact",
+        "//internal/protocol",
+    ],
 )

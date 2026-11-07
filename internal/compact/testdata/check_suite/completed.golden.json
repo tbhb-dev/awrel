@@ -1,0 +1,21 @@
+{
+  "action": "completed",
+  "check_suite": {
+    "id": 999999999817,
+    "head_branch": "renovate/tbhb_rules",
+    "head_sha": "0e3e3a0fe751ddd15e7a56850e361b18cbc542db",
+    "status": "completed",
+    "conclusion": "failure",
+    "pull_requests": [
+      {
+        "number": 27
+      }
+    ],
+    "app": {
+      "slug": "github-actions"
+    }
+  },
+  "sender": {
+    "login": "app-bot-1[bot]"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "action": "completed",
+  "workflow_run": {
+    "id": 99999999999,
+    "name": "ci",
+    "head_branch": "feat/compact-mcp",
+    "head_sha": "d4b3c22e94a598f1c590df2dd6586d1dbb9ad494",
+    "event": "pull_request",
+    "status": "completed",
+    "conclusion": "failure",
+    "html_url": "https://github.com/tbhb-dev/awrel/actions/runs/99999999999",
+    "pull_requests": [
+      {
+        "number": 22
+      }
+    ],
+    "run_attempt": 1
+  },
+  "sender": {
+    "login": "user-1"
+  }
+}

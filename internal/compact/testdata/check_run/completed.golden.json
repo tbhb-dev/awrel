@@ -1,0 +1,25 @@
+{
+  "action": "completed",
+  "check_run": {
+    "id": 999999999993,
+    "name": "bazel (macos-26)",
+    "head_sha": "d4b3c22e94a598f1c590df2dd6586d1dbb9ad494",
+    "html_url": "https://github.com/tbhb-dev/awrel/actions/runs/99999999999/job/999999999993",
+    "status": "completed",
+    "conclusion": "failure",
+    "check_suite": {
+      "id": 999999999998
+    },
+    "app": {
+      "slug": "github-actions"
+    },
+    "pull_requests": [
+      {
+        "number": 22
+      }
+    ]
+  },
+  "sender": {
+    "login": "user-1"
+  }
+}

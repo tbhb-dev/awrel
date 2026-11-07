@@ -1,0 +1,17 @@
+{
+  "action": "edited",
+  "issue": {
+    "html_url": "https://github.com/tbhb-dev/awrel/issues/7",
+    "number": 7,
+    "title": "Dependency Dashboard",
+    "user": {
+      "login": "app-bot-1[bot]"
+    },
+    "labels": [],
+    "state": "open",
+    "body": "This issue lists Renovate updates and detected dependencies. Read the [Dependency Dashboard](https://docs.renovatebot.com/key-concepts/dashboard/) docs to learn more.\n\n## Abandoned Dependencies\n\nThe following dependencies have not received updates for an extended period and may be unmaintained.\n\n> [!NOTE]\n> Packages are marked as abandoned when they exceed the [`abandonmentThreshold`](https://docs.renovatebot.com/configuration-options/#abandonmentthreshold) since their last release. Unlike deprecated packages with official notices, abandonment is detected by release inactivity.\n> \n<details>\n<summary>View abandoned dependencies (5)</summary>\n\n| Datasource | Package | Last Updated |\n|------------|------|-------------|\n| bazel | [vale_proselint](https://redirect.github.com/errata-ai/proselint) | `2024-06-09` |\n| bazel | [vale_write_good](https://redirect.github.com/errata-ai/write-good) | `2024-06-09` |\n| pep621 | [pyyaml](https://redirect.github.com/yaml/pyyaml) | `2025-09-25` |\n| regex | [errata-ai/proselint](https://redirect.github.com/errata-ai/proselint) | `2024-06-09` |\n| regex | [errata-ai/write-good](https://redirect.github.com/errata-ai/write-good) | `2024-06-09` |\n\n</details>\n\n\n## Pending Approval\n\nThe following branches are pending approval. To create them, click on a checkbox below.\n\n - [ ] <!-- approve-branch=renovate/lock-file-maintenance -->chore(deps): lock file maintenance\n - [ ] <!-- approve-branch=renovate/lock-file-maintenance-cspell -->chore(deps): lock file maintenance\n - [ ] <!-- approve-branch=renovate/lock-file-maintenance-python-deps -->chore(deps): lock file maintenance\n - [ ] <!-- approve-all-pending-prs -->🔐 **Create all pending approval PRs at once** 🔐\n\n## Pending Status Checks\n\nThe following updates await pending status checks. To force their creation now, click on a checkbox below.\n\n - [ ] <!-- unpend-branch=renovate/renovate-config -->chore(deps): update tbhb-dev/renovate-config digest to 575b930\n - [ ] <!-- unpend-branch=renovate/tbhb-dev-rules-digest -->chore(deps): update tb…[6379 bytes cut]"
+  },
+  "sender": {
+    "login": "app-bot-1[bot]"
+  }
+}
