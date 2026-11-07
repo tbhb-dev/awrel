@@ -1,0 +1,99 @@
+{
+  "ref": "refs/heads/feat/backoff",
+  "before": "abc0000000000000000000000000000000000000",
+  "after": "abc0000000000000000000000000000000000003",
+  "repository": {
+    "full_name": "example-org/example-repo",
+    "private": true,
+    "default_branch": "main"
+  },
+  "pusher": {},
+  "organization": {
+    "id": 2001
+  },
+  "enterprise": {
+    "id": 77
+  },
+  "sender": {
+    "login": "user-1",
+    "type": "User"
+  },
+  "installation": {
+    "id": 9001
+  },
+  "created": false,
+  "deleted": false,
+  "forced": false,
+  "base_ref": null,
+  "compare": "https://github.com/example-org/example-repo/compare/abc000000000...abc000000000",
+  "commits": [
+    {
+      "id": "abc0000000000000000000000000000000000001",
+      "tree_id": "abc00000000000000000000000000000000001f5",
+      "distinct": true,
+      "message": "feat: step 1\n\nLonger explanation of step 1 that the compact form drops.",
+      "timestamp": "2026-11-05T08:01:00Z",
+      "author": {},
+      "committer": {},
+      "added": [
+        "internal/retry/file1.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000002",
+      "tree_id": "abc00000000000000000000000000000000001f6",
+      "distinct": true,
+      "message": "feat: step 2\n\nLonger explanation of step 2 that the compact form drops.",
+      "timestamp": "2026-11-05T08:02:00Z",
+      "author": {},
+      "committer": {},
+      "added": [
+        "internal/retry/file2.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    },
+    {
+      "id": "abc0000000000000000000000000000000000003",
+      "tree_id": "abc00000000000000000000000000000000001f7",
+      "distinct": true,
+      "message": "feat: step 3\n\nLonger explanation of step 3 that the compact form drops.",
+      "timestamp": "2026-11-05T08:03:00Z",
+      "author": {},
+      "committer": {},
+      "added": [
+        "internal/retry/file3.go"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md",
+        "internal/retry/retry.go"
+      ]
+    }
+  ],
+  "head_commit": {
+    "id": "abc0000000000000000000000000000000000003",
+    "tree_id": "abc00000000000000000000000000000000001f7",
+    "distinct": true,
+    "message": "feat: step 3\n\nLonger explanation of step 3 that the compact form drops.",
+    "timestamp": "2026-11-05T08:03:00Z",
+    "author": {},
+    "committer": {},
+    "added": [
+      "internal/retry/file3.go"
+    ],
+    "removed": [],
+    "modified": [
+      "README.md",
+      "internal/retry/retry.go"
+    ]
+  }
+}

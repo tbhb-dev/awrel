@@ -33,6 +33,7 @@ direnv
 docstrings
 dunder
 dupl
+errchkjson
 esac
 execpath
 exhaustruct
@@ -55,7 +56,9 @@ gofrs
 gofumpt
 goheader
 golangci
+gollum
 golines
+gomod
 gomodguard
 gomutants
 goproxy
@@ -107,6 +110,7 @@ noremote
 nosandbox
 nosystem
 owenlamont
+paralleltest
 perfsprint
 pflag
 pipefail
@@ -115,6 +119,7 @@ ppid
 prek
 pretooluse
 pylock
+rebaseable
 recvcheck
 relayclient
 rollouts

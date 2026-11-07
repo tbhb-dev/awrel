@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Tony Burns
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@tbhb_rules//repo:defs.bzl", "repo_files")
+
+repo_files()
+
+go_library(
+    name = "compact",
+    srcs = [
+        "compact.go",
+        "keep.go",
+        "node.go",
+    ],
+    importpath = "go.tbhb.dev/awrel/internal/compact",
+    visibility = ["//:__subpackages__"],
+)
+
+# The fixtures the tests read. The root package's gobco and gomutants targets
+# copy them into their scratch modules.
+filegroup(
+    name = "testdata",
+    srcs = glob(["testdata/**"]),
+    visibility = ["//:__pkg__"],
+)
+
+go_test(
+    name = "compact_test",
+    srcs = ["compact_internal_test.go"],
+    data = [":testdata"],
+    embed = [":compact"],
+    # The whole-module Go checks in the root package take the tests too.
+    visibility = ["//:__pkg__"],
+)

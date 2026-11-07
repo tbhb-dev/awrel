@@ -3,9 +3,10 @@
 
 ---
 # Import contracts: the command sits on the internal packages. The chain,
-# leaf first, is protocol, transport, relayclient; delivery builds on
-# protocol, and mcpserver on delivery and protocol. internal/buildmeta imports
-# nothing of the module. Every package must belong to a component.
+# leaf first, is protocol, transport, relayclient; compact is a leaf; delivery
+# builds on compact and protocol, and mcpserver on delivery and protocol.
+# internal/buildmeta imports nothing of the module. Every package must belong
+# to a component.
 version: 3
 
 allow:
@@ -18,6 +19,7 @@ components:
   protocol: {in: internal/protocol}
   transport: {in: internal/transport}
   relayclient: {in: internal/relayclient}
+  compact: {in: internal/compact}
   delivery: {in: internal/delivery}
   mcpserver: {in: internal/mcpserver}
 
@@ -40,8 +42,10 @@ deps:
   relayclient:
     mayDependOn: [protocol, transport]
     canUse: [websocket]  # its tests' fake relay accepts with coder/websocket
+  compact:
+    mayDependOn: [compact]  # a leaf
   delivery:
-    mayDependOn: [protocol]
+    mayDependOn: [compact, protocol]
   mcpserver:
     mayDependOn: [delivery, protocol]
     canUse: [mcpsdk]

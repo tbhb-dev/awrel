@@ -1,0 +1,16 @@
+{
+  "action": "queued",
+  "workflow_job": {
+    "id": 999999999999,
+    "head_branch": "feat/compact-mcp",
+    "run_attempt": 1,
+    "head_sha": "d4b3c22e94a598f1c590df2dd6586d1dbb9ad494",
+    "html_url": "https://github.com/tbhb-dev/awrel/actions/runs/99999999999/job/999999999999",
+    "status": "queued",
+    "conclusion": null,
+    "name": "bazel (ubuntu-26.04)"
+  },
+  "sender": {
+    "login": "user-1"
+  }
+}

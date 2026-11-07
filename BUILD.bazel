@@ -120,6 +120,7 @@ GO_TARGETS = [
     "//cmd/awrel",
     "//cmd/awrel:awrel_test",
     "//internal/buildmeta:buildmeta_test",
+    "//internal/compact:compact_test",
     "//internal/delivery:delivery_test",
     "//internal/mcpserver:mcpserver_test",
     "//internal/protocol:protocol_test",
@@ -184,6 +185,7 @@ govulncheck(
 gomutants_test(
     name = "gomutants_test",
     cpus = 2,
+    data = ["//internal/compact:testdata"],
     flags = [
         "--exclude-calls=*.DebugContext,*.InfoContext,*.WarnContext,*.ErrorContext",
         # A mutant that breaks a wait takes the tests' own one-second limits
@@ -197,6 +199,7 @@ gomutants_test(
     tests = [
         "//cmd/awrel:awrel_test",
         "//internal/buildmeta:buildmeta_test",
+        "//internal/compact:compact_test",
         "//internal/delivery:delivery_test",
         "//internal/mcpserver:mcpserver_test",
         "//internal/protocol:protocol_test",
@@ -221,6 +224,14 @@ gobco_test(
     go_mod = "go.mod",
     go_sum = "go.sum",
     tests = ["//internal/buildmeta:buildmeta_test"],
+)
+
+gobco_test(
+    name = "compact_gobco_test",
+    data = ["//internal/compact:testdata"],
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    tests = ["//internal/compact:compact_test"],
 )
 
 gobco_test(
