@@ -228,7 +228,7 @@ func TestResolveEndpoint(t *testing.T) {
 		want    string
 		wantErr string
 	}{
-		{"default", "", nil, defaultEndpoint, ""},
+		{"none", "", nil, "", "no relay endpoint set: pass --endpoint or set AWREL_ENDPOINT"},
 		{
 			"env over default",
 			"",
@@ -409,10 +409,28 @@ func TestInvalidEndpointExitsWithError(t *testing.T) {
 	}
 }
 
+func TestMissingEndpointFailsEveryTool(t *testing.T) {
+	t.Parallel()
+
+	// The token is set, so only the endpoint can fail the tools.
+	running := startSession(t, env(map[string]string{tokenEnv: sentinelValue}), 0)
+	out := running.askAll(t)
+
+	want := "not connected to the relay: no relay endpoint set"
+	if strings.Count(out, want) != 3 || !strings.Contains(running.errOut.String(), "no relay endpoint") {
+		t.Errorf("stdout:\n%s\nstderr:\n%s", out, running.errOut.String())
+	}
+
+	err := running.finish(t)
+	if err != nil {
+		t.Errorf("exit: %v", err)
+	}
+}
+
 func TestMissingTokenFailsEveryTool(t *testing.T) {
 	t.Parallel()
 
-	running := startSession(t, env(nil), 0)
+	running := startSession(t, env(map[string]string{endpointEnv: unreachable}), 0)
 	out := running.askAll(t)
 
 	want := "not connected to the relay: neither AWREL_CONNECT_TOKEN nor AWREL_CONNECT_TOKEN_FILE is set"
@@ -430,7 +448,7 @@ func TestUnreadableTokenFileFailsEveryTool(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "missing")
-	running := startSession(t, env(map[string]string{tokenFileEnv: path}), 0)
+	running := startSession(t, env(map[string]string{tokenFileEnv: path, endpointEnv: unreachable}), 0)
 	out := running.askAll(t)
 
 	// Stdout is JSON and stderr is a quoted log value. Both double the
