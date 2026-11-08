@@ -43,6 +43,16 @@ A payload over 64 KiB reaches the agent as a short note, with the attribute `tru
 
 By default the server delivers compact payloads, which reduce each payload to a selection of its fields. A compact body has no API URLs, only the login and type for each user, and can still include third-party text such as issue and comment bodies and commit messages. Events arrive with the attribute `compact` set to `true`, and the agent fetches details with `gh`. Compaction runs before the 64 KiB check, so most large pushes arrive. Pass `--format full` or set `AWREL_FORMAT=full` to get the whole payload. Either overrides the default of `compact`, and the flag takes precedence over the variable. See the documentation of the `internal/compact` package for the rules.
 
+## Pick up a new release
+
+After the pinned version in the MCP configuration changes, restart the Claude Code session. Use `/restart`, or quit Claude Code and start it again. Don't rely on `/mcp` reconnect for a version change.
+
+This is a known Claude Code issue, observed with Claude Code 2.1.319 on macOS. After a `/mcp` reconnect, Claude Code starts a new stdio server process but keeps the standard input and output of the previous one open. The old `awrel mcp` process never sees end of file, so it keeps running with its relay WebSocket and its subscriptions. The session can end up with two relay connections, and tool calls can still reach the old version. A release that predates the filter fields can then ignore them.
+
+To check, run `lsof -a -p <old pid> -d 0,1` to see the standard input and output sockets of the old process, and `lsof -U` to see that the Claude Code process still holds their peer ends. `lsof -a -p <old pid> -i` shows its relay connection still `ESTABLISHED`. A restart closes every pipe, and both processes exit.
+
+Subscriptions last only for the server process, so they're empty after the restart. Subscribe again.
+
 ## Subscription filters
 
 Both `subscribe` and `unsubscribe` accept optional `action`, `conclusion`, `name`, and `workflow_path` fields on complete GitHub event and repository pairs. Every supplied filter must match. A list matches any of its values. Different filtered subscriptions remain separate entries. An event matching two or more entries arrives once.
