@@ -7,7 +7,7 @@ generated:
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-08T00:11:32Z"
+    at: "2026-11-08T01:57:23Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -52,7 +52,7 @@ Clients choose each `id`, a string of 1 to 64 characters, and the reply echoes i
 
 Error codes are `bad_message` (not JSON, unknown `type`, missing or ill-typed field), `bad_subscription` (a field fails the patterns in the Subscriptions section, or a `github` subscribe lacks `event` or `repository`), `not_subscribed`, and `limit` (the change would push the attachment past its budget). An error leaves the subscriptions unchanged.
 
-A ping frame must be exactly the 15 bytes `{"type":"ping"}` to get the automatic response. Any other frame that resembles a ping, such as one with spaces or extra fields, goes to the Durable Object as a normal message and gets `bad_message`. Ping never wakes the Durable Object, because `setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}'))` answers it. The Durable Object rejects a change whose `JSON.stringify` of the attachment would exceed 1792 bytes, well under the 16,384-byte `serializeAttachment` limit, and treats a throw from `serializeAttachment` as `limit`.
+A ping frame must be exactly the 15 bytes `{"type":"ping"}` to get the automatic response. Any other frame that resembles a ping, such as one with spaces or extra fields, goes to the Durable Object as a normal message and gets `bad_message`. Ping never wakes the Durable Object, because `setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}'))` answers it. The Durable Object rejects a change whose attachment JSON exceeds 12,288 UTF-8 bytes, under the 16,384-byte `serializeAttachment` limit, and treats a throw from `serializeAttachment` as `limit`.
 
 Clients ignore message types they don't know. For a client message type the server doesn't know, the reply is `bad_message`.
 

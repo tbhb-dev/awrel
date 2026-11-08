@@ -2,7 +2,7 @@
 // Copyright Tony Burns
 
 import { describe, expect, it } from "vitest";
-import { handle, limit, type Subscription } from "./protocol.ts";
+import { handle, limit, type Subscription, utf8Bytes } from "./protocol.ts";
 
 const GITHUB: Subscription = {
   provider: "github",
@@ -300,31 +300,38 @@ describe("subscribe", () => {
     const named = (i: number) => ({
       provider: "github",
       event: "push",
-      repository: `o/${String(i).padStart(100, "r")}`,
+      repository: `o/${String(i).padStart(67, "r")}`,
     });
-    const full: Subscription[] = Array.from({ length: 11 }, (_, i) => named(i));
+    const full: Subscription[] = Array.from({ length: 100 }, (_, i) =>
+      named(i),
+    );
     const last = (length: number) => ({
       provider: "github",
       event: "push",
       repository: `o/${"r".repeat(length)}`,
     });
 
-    it("accepts a list of exactly 1792 bytes", () => {
-      const next = [...full, last(13)];
-      expect(JSON.stringify({ subscriptions: next }).length).toBe(1792);
-      expect(handle(full, frame("subscribe", last(13))).next).toStrictEqual(
+    it("accepts a list of exactly 12288 bytes", () => {
+      const next = [...full, last(14)];
+      expect(utf8Bytes(JSON.stringify({ subscriptions: next }))).toBe(12288);
+      expect(handle(full, frame("subscribe", last(14))).next).toStrictEqual(
         next,
       );
     });
 
-    it("refuses a list of 1793 bytes", () => {
+    it("refuses a list of 12289 bytes", () => {
       expect(
-        JSON.stringify({ subscriptions: [...full, last(14)] }).length,
-      ).toBe(1793);
-      expect(handle(full, frame("subscribe", last(14)))).toStrictEqual({
-        reply: limit("i"),
-        next: null,
-      });
+        utf8Bytes(JSON.stringify({ subscriptions: [...full, last(15)] })),
+      ).toBe(12289);
+      expect(handle(full, frame("subscribe", last(15)))).toStrictEqual(
+        error("i", "limit", "subscriptions would exceed 12288 bytes"),
+      );
+    });
+
+    it("counts UTF-8 bytes rather than UTF-16 code units", () => {
+      const value = "é😀";
+      expect(value.length).toBe(3);
+      expect(utf8Bytes(value)).toBe(6);
     });
 
     it("words the limit error", () => {
@@ -332,7 +339,7 @@ describe("subscribe", () => {
         type: "error",
         id: "x",
         code: "limit",
-        message: "subscriptions would exceed 1792 bytes",
+        message: "subscriptions would exceed 12288 bytes",
       });
     });
   });

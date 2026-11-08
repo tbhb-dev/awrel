@@ -37,13 +37,20 @@ export type Outcome =
       readonly next: readonly Subscription[];
     };
 
+const ATTACHMENT_BUDGET = 12288;
+
+/** The UTF-8 byte count of a string. */
+export function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
 /** The `limit` error for a change the attachment refused. */
 export function limit(id: string): ErrorReply {
   return {
     type: "error",
     id,
     code: "limit",
-    message: "subscriptions would exceed 1792 bytes",
+    message: `subscriptions would exceed ${String(ATTACHMENT_BUDGET)} bytes`,
   };
 }
 
@@ -197,7 +204,9 @@ export function handle(
       return unchanged();
     }
     const next = [...current, subscription];
-    if (JSON.stringify({ subscriptions: next }).length > 1792) {
+    if (
+      utf8Bytes(JSON.stringify({ subscriptions: next })) > ATTACHMENT_BUDGET
+    ) {
       return { reply: limit(id), next: null };
     }
     return changed(next);
