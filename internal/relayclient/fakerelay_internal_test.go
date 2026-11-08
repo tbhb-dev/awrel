@@ -310,7 +310,8 @@ func (f *fakeRelay) connCount() int {
 }
 
 // awaitReady connects without sending a request, preserving frame counts and
-// request IDs in tests that assert them. acquire returns only after replay.
+// request IDs in tests that assert them. It waits for the session that requests
+// use, which is ready only after the replay.
 func awaitReady(t *testing.T, client *Client) {
 	t.Helper()
 
