@@ -374,3 +374,360 @@ it("forgets a connection that closed", async () => {
   expect(open).toBe(0);
   expect(await relay().publish(EVENT)).toBe(0);
 });
+
+// Exercise the matching matrix synchronously; socket delivery is covered above
+// and by the overlapping-subscription test below.
+async function publishFilteredTo(
+  subscription: Subscription,
+  event: RelayEvent,
+) {
+  return runInDurableObject(relay(), (instance, state) => {
+    const messages: string[] = [];
+    const socket = {
+      deserializeAttachment: () => ({ subscriptions: [subscription] }),
+      send: (message: string) => messages.push(message),
+    } as unknown as WebSocket;
+    const original = state.getWebSockets.bind(state);
+    state.getWebSockets = () => [socket];
+    try {
+      return { reached: instance.publish(event), messages };
+    } finally {
+      state.getWebSockets = original;
+    }
+  });
+}
+
+const FILTERED = {
+  provider: "github",
+  event: "workflow_run",
+  repository: "owner/repo",
+  action: ["completed", "requested"],
+  conclusion: ["failure", "timed_out"],
+  name: " CI / test ",
+  workflow_path: ".github/workflows/ci.yml",
+};
+const WORKFLOW: RelayEvent = {
+  ...EVENT,
+  event: "workflow_run",
+  payload: {
+    action: "completed",
+    workflow_run: {
+      conclusion: "failure",
+      name: " CI / test ",
+      path: ".github/workflows/ci.yml",
+    },
+  },
+};
+
+it.each(["check_run", "check_suite", "workflow_run", "workflow_job"])(
+  "matches %s conclusion from its own object and action from the payload",
+  async (event) => {
+    const subscription = {
+      provider: "github",
+      event,
+      repository: "owner/repo",
+      action: ["created", "completed"],
+      conclusion: ["success", "future_value"],
+    };
+    const { reached, messages } = await publishFilteredTo(subscription, {
+      ...EVENT,
+      event,
+      payload: { action: "completed", [event]: { conclusion: "future_value" } },
+    });
+    expect(reached).toBe(1);
+    expect(messages).toHaveLength(1);
+  },
+);
+
+it.each(["check_run", "workflow_run", "workflow_job"])(
+  "matches exact names on %s",
+  async (event) => {
+    const { reached } = await publishFilteredTo(
+      {
+        provider: "github",
+        event,
+        repository: "owner/repo",
+        action: FILTERED.action,
+        conclusion: FILTERED.conclusion,
+        name: FILTERED.name,
+      },
+      {
+        ...EVENT,
+        event,
+        payload: {
+          action: "requested",
+          [event]: { conclusion: "timed_out", name: FILTERED.name },
+        },
+      },
+    );
+    expect(reached).toBe(1);
+  },
+);
+
+it("matches all supplied filters together", async () => {
+  const { reached } = await publishFilteredTo(FILTERED, WORKFLOW);
+  expect(reached).toBe(1);
+});
+
+for (const field of [
+  "action",
+  "conclusion",
+  "name",
+  "workflow_path",
+] as const) {
+  it.each([undefined, null, 1, false, [], {}, "other"])(
+    `rejects a missing, non-string or different ${field}: %j`,
+    async (value) => {
+      const object = {
+        conclusion: "failure",
+        name: FILTERED.name,
+        path: FILTERED.workflow_path,
+      };
+      const payload =
+        field === "action"
+          ? { action: value, workflow_run: object }
+          : {
+              action: "completed",
+              workflow_run: {
+                ...object,
+                [field === "workflow_path" ? "path" : field]: value,
+              },
+            };
+      const { reached, messages } = await publishFilteredTo(FILTERED, {
+        ...WORKFLOW,
+        payload,
+      });
+      expect(reached).toBe(0);
+      expect(messages).toEqual([]);
+    },
+  );
+}
+
+it.each([undefined, null, 1, false, "text"])(
+  "ignores absent or non-object payload %j without filters",
+  async (payload) => {
+    const { reached } = await publishFilteredTo(
+      { provider: "github" },
+      { ...EVENT, payload },
+    );
+    expect(reached).toBe(1);
+  },
+);
+it.each([undefined, null, 1, false, "text"])(
+  "cannot match filters on an absent or non-object event object %j",
+  async (object) => {
+    const { reached } = await publishFilteredTo(FILTERED, {
+      ...WORKFLOW,
+      payload: { action: "completed", workflow_run: object },
+    });
+    expect(reached).toBe(0);
+  },
+);
+
+it("does not use a nested check suite conclusion in a check run", async () => {
+  const { reached } = await publishFilteredTo(
+    {
+      provider: "github",
+      event: "check_run",
+      repository: "owner/repo",
+      conclusion: ["failure"],
+    },
+    {
+      ...EVENT,
+      event: "check_run",
+      payload: {
+        check_run: { conclusion: null, check_suite: { conclusion: "failure" } },
+        check_suite: { conclusion: "failure" },
+        conclusion: "failure",
+      },
+    },
+  );
+  expect(reached).toBe(0);
+});
+
+it.each([
+  { name: "ci / test" },
+  { name: "CI / test" },
+  { name: " CI / test" },
+  { name: "*" },
+  { name: "test" },
+  { workflow_path: ".github/workflows/CI.yml" },
+  { workflow_path: "ci.yml" },
+  { workflow_path: "./.github/workflows/ci.yml" },
+])("keeps names and paths exact: %j", async (changed) => {
+  const { reached } = await publishFilteredTo(
+    { ...FILTERED, ...changed },
+    WORKFLOW,
+  );
+  expect(reached).toBe(0);
+});
+
+it("delivers overlapping filtered subscriptions once to each matching socket", async () => {
+  const stub = relay();
+  const first = await connect(stub, {
+    subscriptions: [
+      FILTERED,
+      { ...FILTERED, conclusion: ["failure"] },
+      { provider: "github" },
+    ],
+  });
+  const second = await connect(stub, { subscriptions: [FILTERED] });
+  await connect(stub, { subscriptions: [{ ...FILTERED, name: "other" }] });
+  expect(await stub.publish(WORKFLOW)).toBe(2);
+  await settle();
+  expect(first).toHaveLength(1);
+  expect(second).toHaveLength(1);
+});
+
+it("stores canonical filters, echoes capability, and preserves the attachment on invalid filters", async () => {
+  const client = await dial();
+  const canonical = {
+    ...FILTERED,
+    action: ["completed", "requested"],
+    conclusion: ["failure", "timed_out"],
+  };
+  const request = (type: string, subscription: unknown, flag = true) =>
+    JSON.stringify({ type, id: "f", subscription, subscription_filters: flag });
+  const reply = {
+    ...subscriptions("f", [canonical]),
+    subscription_filters: true,
+  };
+  expect(
+    await exchange(
+      client,
+      request("subscribe", {
+        ...FILTERED,
+        repository: "OWNER/Repo",
+        action: ["requested", "completed", "requested"],
+      }),
+    ),
+  ).toStrictEqual(reply);
+  for (const invalid of [
+    { ...FILTERED, action: null },
+    { ...FILTERED, event: "push" },
+    { ...FILTERED, provider: "gitlab" },
+    { ...FILTERED, repository: undefined },
+  ]) {
+    expect(await exchange(client, request("subscribe", invalid))).toMatchObject(
+      { type: "error", code: "bad_subscription" },
+    );
+    expect(await exchange(client, request("list", undefined))).toStrictEqual(
+      reply,
+    );
+  }
+  expect(await exchange(client, list)).toStrictEqual(
+    subscriptions("l", [canonical]),
+  );
+  expect(
+    await exchange(client, request("unsubscribe", canonical)),
+  ).toStrictEqual({ ...subscriptions("f", []), subscription_filters: true });
+});
+
+it.each(["check_run", "check_suite", "workflow_run", "workflow_job"])(
+  "rejects absent and non-string fields on %s without consulting other objects",
+  async (event) => {
+    await runInDurableObject(relay(), (instance, state) => {
+      const subscription: Subscription = {
+        provider: "github",
+        event,
+        repository: "owner/repo",
+        conclusion: ["failure"],
+      };
+      const sent: string[] = [];
+      const socket = {
+        deserializeAttachment: () => ({ subscriptions: [subscription] }),
+        send: (message: string) => sent.push(message),
+      } as unknown as WebSocket;
+      const original = state.getWebSockets.bind(state);
+      state.getWebSockets = () => [socket];
+      try {
+        for (const conclusion of [
+          undefined,
+          null,
+          0,
+          false,
+          {},
+          [],
+          "success",
+        ]) {
+          expect(
+            instance.publish({
+              ...EVENT,
+              event,
+              payload: { [event]: { conclusion }, conclusion: "failure" },
+            }),
+          ).toBe(0);
+        }
+        expect(sent).toEqual([]);
+        expect(
+          instance.publish({
+            ...EVENT,
+            event,
+            payload: { [event]: { conclusion: "failure" } },
+          }),
+        ).toBe(1);
+        expect(sent).toHaveLength(1);
+      } finally {
+        state.getWebSockets = original;
+      }
+    });
+  },
+);
+
+it("extracts payload filters once per publication and reuses them across sockets", async () => {
+  await runInDurableObject(relay(), (instance, state) => {
+    const reads = { action: 0, object: 0, conclusion: 0, name: 0, path: 0 };
+    const payload = {
+      get action() {
+        reads.action += 1;
+        return "completed";
+      },
+      get workflow_run() {
+        reads.object += 1;
+        return {
+          get conclusion() {
+            reads.conclusion += 1;
+            return "failure";
+          },
+          get name() {
+            reads.name += 1;
+            return FILTERED.name;
+          },
+          get path() {
+            reads.path += 1;
+            return FILTERED.workflow_path;
+          },
+        };
+      },
+    };
+    const sent: string[] = [];
+    const socket = {
+      deserializeAttachment: () => ({ subscriptions: [FILTERED] }),
+      send: (message: string) => sent.push(message),
+    } as unknown as WebSocket;
+    const original = state.getWebSockets.bind(state);
+    state.getWebSockets = () => [socket, socket, socket];
+    try {
+      expect(instance.publish({ ...WORKFLOW, payload })).toBe(3);
+      expect(sent).toHaveLength(3);
+      // Each property is read once to serialize the event, and once to match it.
+      expect(reads).toStrictEqual({
+        action: 2,
+        object: 2,
+        conclusion: 2,
+        name: 2,
+        path: 2,
+      });
+    } finally {
+      state.getWebSockets = original;
+    }
+  });
+});
+
+it("does not test omitted filters even when the payload has those fields", async () => {
+  const { reached } = await publishFilteredTo(
+    { provider: "github", event: "workflow_run", repository: "owner/repo" },
+    WORKFLOW,
+  );
+  expect(reached).toBe(1);
+});
