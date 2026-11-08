@@ -46,7 +46,7 @@ async function post(delivery: Delivery = {}): Promise<Response> {
   });
 }
 
-// Posts a delivery to a relay holding one catch-all connection, and returns
+// Seeds an older catch-all connection directly, posts a delivery, and returns
 // the parsed messages the connection received.
 async function received(delivery: Delivery): Promise<unknown[]> {
   const messages = await connect(relay(), {
@@ -200,7 +200,9 @@ describe("relayed event", () => {
 
   it("answers a ping without relaying it", async () => {
     const messages = await connect(relay(), {
-      subscriptions: [{ provider: "github" }],
+      subscriptions: [
+        { provider: "github", event: "ping", repository: "owner/repo" },
+      ],
     });
     const response = await post({ event: "ping" });
     expect(response.status).toBe(202);
@@ -218,10 +220,14 @@ describe("relayed event", () => {
   it("reaches only the matching subscribers", async () => {
     const stub = relay();
     const hit = await connect(stub, {
-      subscriptions: [{ provider: "github", repository: "owner/repo" }],
+      subscriptions: [
+        { provider: "github", event: "push", repository: "owner/repo" },
+      ],
     });
     const miss = await connect(stub, {
-      subscriptions: [{ provider: "github", repository: "owner/other" }],
+      subscriptions: [
+        { provider: "github", event: "push", repository: "owner/other" },
+      ],
     });
     expect((await post()).status).toBe(202);
     await settle();

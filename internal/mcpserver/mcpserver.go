@@ -24,8 +24,9 @@ import (
 // Instructions is the text the server gives the agent when it connects.
 const Instructions = "awrel relays webhook events into this session. " +
 	"Today the only provider is GitHub. " +
-	"Call `subscribe` with provider \"github\", and optionally an event name " +
+	"Call `subscribe` with provider \"github\", an event name " +
 	"(the X-GitHub-Event value, such as \"pull_request\") and a repository \"owner/name\". " +
+	"Subscribe once per event and repository pair; anything less is refused. " +
 	"Matching events arrive as `<channel source=\"awrel\" ...>` tags with attributes " +
 	"provider, event, action, repository, delivery and compact, " +
 	"with the webhook's JSON payload as the body. " +
@@ -50,6 +51,13 @@ const channelCapability = "claude/channel"
 // errNoConnection means Notify ran before the transport connected.
 var errNoConnection = errors.New("no MCP connection")
 
+// errIncompleteSubscription refuses subscriptions that could flood the session.
+var errIncompleteSubscription = errors.New(
+	"a github subscription needs an event type and a repository: " +
+		"one without either matches far more than you need and can flood this session; " +
+		"subscribe once per event type and repository, such as event \"check_suite\" with repository \"owner/name\"",
+)
+
 // Relay is the connection to the relay that the tools drive.
 type Relay interface {
 	Subscribe(ctx context.Context, sub protocol.Subscription) ([]protocol.Subscription, error)
@@ -66,11 +74,19 @@ type Options struct {
 	Compact bool
 }
 
-// SubscriptionArgs is the input of the subscribe and unsubscribe tools.
+// SubscriptionArgs is the input of the subscribe tool.
 type SubscriptionArgs struct {
+	Provider   string `json:"provider"   jsonschema:"webhook provider; only \"github\" today"`
+	Event      string `json:"event"      jsonschema:"required for github: event name, such as pull_request or issue_comment (GitHub's X-GitHub-Event)"` //nolint:lll // a struct tag can't wrap
+	Repository string `json:"repository" jsonschema:"required for github: owner/name"`
+}
+
+// UnsubscribeArgs is the input of the unsubscribe tool, including older
+// subscriptions without an event or repository.
+type UnsubscribeArgs struct {
 	Provider   string `json:"provider"             jsonschema:"webhook provider; only \"github\" today"`
-	Event      string `json:"event,omitempty"      jsonschema:"event name, such as pull_request or issue_comment (GitHub's X-GitHub-Event); omit for all events"` //nolint:lll // a struct tag can't wrap
-	Repository string `json:"repository,omitempty" jsonschema:"owner/name; omit for every repository"`
+	Event      string `json:"event,omitempty"      jsonschema:"event name of the subscription to remove"`
+	Repository string `json:"repository,omitempty" jsonschema:"owner/name of the subscription to remove"`
 }
 
 // ListArgs is the input of the tool that lists subscriptions, which takes none.
@@ -241,13 +257,19 @@ func (s *Server) subscribe(
 		return nil, SubscriptionsResult{Subscriptions: nil}, noDeliveryError{client: current.name}
 	}
 
+	if args.Event == "" || args.Repository == "" {
+		// The SDK ignores the output of a handler that fails.
+		// gomutants:disable-next-line RETURN_ZERO reason="a failed handler's output is ignored"
+		return nil, SubscriptionsResult{Subscriptions: nil}, errIncompleteSubscription
+	}
+
 	subs, err := s.relay.Subscribe(ctx, protocol.Subscription(args))
 
 	return nil, SubscriptionsResult{Subscriptions: subs}, err //nolint:wrapcheck // the relay's text is the tool's error
 }
 
 func (s *Server) unsubscribe(
-	ctx context.Context, _ *mcp.CallToolRequest, args SubscriptionArgs,
+	ctx context.Context, _ *mcp.CallToolRequest, args UnsubscribeArgs,
 ) (*mcp.CallToolResult, SubscriptionsResult, error) {
 	subs, err := s.relay.Unsubscribe(ctx, protocol.Subscription(args))
 

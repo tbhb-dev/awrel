@@ -4,7 +4,11 @@
 import { describe, expect, it } from "vitest";
 import { handle, limit, type Subscription } from "./protocol.ts";
 
-const GITHUB: Subscription = { provider: "github" };
+const GITHUB: Subscription = {
+  provider: "github",
+  event: "push",
+  repository: "o/r",
+};
 
 function error(id: string | null, code: string, message: string) {
   return { reply: { type: "error", id, code, message }, next: null };
@@ -133,7 +137,7 @@ function bad(message: string) {
 describe("provider", () => {
   const pattern = "provider must match ^[a-z0-9-]{1,32}$";
 
-  it.each(["a", "z", "0", "9", "-", "github", "a".repeat(32)])(
+  it.each(["a", "z", "0", "9", "-", "a".repeat(32)])(
     "accepts %s",
     (provider) => {
       expect(subscribe({ provider })).toStrictEqual(accepted({ provider }));
@@ -171,8 +175,10 @@ describe("event", () => {
   it.each(["a", "z", "0", "9", "_", ".", "-", "pull_request", "a".repeat(64)])(
     "accepts %s",
     (event) => {
-      expect(subscribe({ provider: "github", event })).toStrictEqual(
-        accepted({ provider: "github", event }),
+      expect(
+        subscribe({ provider: "github", event, repository: "o/r" }),
+      ).toStrictEqual(
+        accepted({ provider: "github", event, repository: "o/r" }),
       );
     },
   );
@@ -180,16 +186,16 @@ describe("event", () => {
   it.each(["", "a".repeat(65), "Push", "push!", "!push", "push/x"])(
     "rejects %j",
     (event) => {
-      expect(subscribe({ provider: "github", event })).toStrictEqual(
-        bad(pattern),
-      );
+      expect(
+        subscribe({ provider: "github", event, repository: "o/r" }),
+      ).toStrictEqual(bad(pattern));
     },
   );
 
   it.each([null, 1])("rejects the type of %j", (event) => {
-    expect(subscribe({ provider: "github", event })).toStrictEqual(
-      error("i", "bad_message", "event must be a string"),
-    );
+    expect(
+      subscribe({ provider: "github", event, repository: "o/r" }),
+    ).toStrictEqual(error("i", "bad_message", "event must be a string"));
   });
 });
 
@@ -205,8 +211,10 @@ describe("repository", () => {
     ...characters.map((c) => [`${c}/b`, `${c.toLowerCase()}/b`]),
     ...characters.map((c) => [`b/${c}`, `b/${c.toLowerCase()}`]),
   ])("accepts %s as %s", (repository, stored) => {
-    expect(subscribe({ provider: "github", repository })).toStrictEqual(
-      accepted({ provider: "github", repository: stored }),
+    expect(
+      subscribe({ provider: "github", event: "push", repository }),
+    ).toStrictEqual(
+      accepted({ provider: "github", event: "push", repository: stored }),
     );
   });
 
@@ -224,23 +232,44 @@ describe("repository", () => {
     "o/!r",
     "o/r!",
   ])("rejects %j", (repository) => {
-    expect(subscribe({ provider: "github", repository })).toStrictEqual(
-      bad(pattern),
-    );
+    expect(
+      subscribe({ provider: "github", event: "push", repository }),
+    ).toStrictEqual(bad(pattern));
   });
 
   it.each([null, 1])("rejects the type of %j", (repository) => {
-    expect(subscribe({ provider: "github", repository })).toStrictEqual(
-      error("i", "bad_message", "repository must be a string"),
-    );
+    expect(
+      subscribe({ provider: "github", event: "push", repository }),
+    ).toStrictEqual(error("i", "bad_message", "repository must be a string"));
   });
 });
 
 describe("subscribe", () => {
+  it.each([
+    [{ provider: "github" }, "event and repository"],
+    [{ provider: "github", event: "push" }, "repository"],
+    [{ provider: "github", repository: "o/r" }, "event"],
+  ])(
+    "refuses an incomplete github subscription %j",
+    (subscription, missing) => {
+      expect(subscribe(subscription)).toStrictEqual(
+        bad(
+          `github subscription is missing ${missing}; subscribe once per event type and repository`,
+        ),
+      );
+    },
+  );
+
+  it.each([
+    { provider: "gitlab" },
+    { provider: "gitlab", event: "push" },
+    { provider: "gitlab", repository: "o/r" },
+  ])("keeps optional fields for other providers: %j", (subscription) => {
+    expect(subscribe(subscription)).toStrictEqual(accepted(subscription));
+  });
+
   it("ignores unknown fields", () => {
-    expect(subscribe({ provider: "github", extra: 1 })).toStrictEqual(
-      accepted(GITHUB),
-    );
+    expect(subscribe({ ...GITHUB, extra: 1 })).toStrictEqual(accepted(GITHUB));
   });
 
   it("changes nothing when the subscription is already present", () => {
@@ -251,7 +280,7 @@ describe("subscribe", () => {
   });
 
   it("adds a subscription that differs only in provider", () => {
-    const other = { provider: "gitlab" };
+    const other = { ...GITHUB, provider: "gitlab" };
     expect(handle([GITHUB], frame("subscribe", other)).next).toStrictEqual([
       GITHUB,
       other,
@@ -259,8 +288,8 @@ describe("subscribe", () => {
   });
 
   it("adds a subscription that differs in event or repository", () => {
-    const withEvent = { provider: "github", event: "push" };
-    const withRepository = { provider: "github", repository: "o/r" };
+    const withEvent = { ...GITHUB, event: "issues" };
+    const withRepository = { ...GITHUB, repository: "o/other" };
     const first = handle([GITHUB], frame("subscribe", withEvent));
     expect(first.next).toStrictEqual([GITHUB, withEvent]);
     const second = handle(first.next ?? [], frame("subscribe", withRepository));
@@ -270,27 +299,29 @@ describe("subscribe", () => {
   describe("budget", () => {
     const named = (i: number) => ({
       provider: "github",
+      event: "push",
       repository: `o/${String(i).padStart(100, "r")}`,
     });
-    const full: Subscription[] = Array.from({ length: 12 }, (_, i) => named(i));
+    const full: Subscription[] = Array.from({ length: 11 }, (_, i) => named(i));
     const last = (length: number) => ({
       provider: "github",
+      event: "push",
       repository: `o/${"r".repeat(length)}`,
     });
 
     it("accepts a list of exactly 1792 bytes", () => {
-      const next = [...full, last(53)];
+      const next = [...full, last(13)];
       expect(JSON.stringify({ subscriptions: next }).length).toBe(1792);
-      expect(handle(full, frame("subscribe", last(53))).next).toStrictEqual(
+      expect(handle(full, frame("subscribe", last(13))).next).toStrictEqual(
         next,
       );
     });
 
     it("refuses a list of 1793 bytes", () => {
       expect(
-        JSON.stringify({ subscriptions: [...full, last(54)] }).length,
+        JSON.stringify({ subscriptions: [...full, last(14)] }).length,
       ).toBe(1793);
-      expect(handle(full, frame("subscribe", last(54)))).toStrictEqual({
+      expect(handle(full, frame("subscribe", last(14)))).toStrictEqual({
         reply: limit("i"),
         next: null,
       });
@@ -308,8 +339,21 @@ describe("subscribe", () => {
 });
 
 describe("unsubscribe", () => {
+  it.each([
+    { provider: "github" },
+    { provider: "github", event: "push" },
+    { provider: "github", repository: "o/r" },
+  ])("removes an older incomplete subscription %j", (subscription) => {
+    expect(
+      handle([subscription], frame("unsubscribe", subscription)),
+    ).toStrictEqual({
+      ...listed("i", []),
+      next: [],
+    });
+  });
+
   it("removes a present subscription", () => {
-    const other = { provider: "github", event: "push" };
+    const other = { ...GITHUB, event: "issues" };
     expect(handle([GITHUB, other], frame("unsubscribe", GITHUB))).toStrictEqual(
       { ...listed("i", [other]), next: [other] },
     );
@@ -322,9 +366,9 @@ describe("unsubscribe", () => {
   });
 
   it.each([
-    ["provider", { provider: "gitlab" }],
-    ["event", { provider: "github", event: "push" }],
-    ["repository", { provider: "github", repository: "o/r" }],
+    ["provider", { ...GITHUB, provider: "gitlab" }],
+    ["event", { ...GITHUB, event: "issues" }],
+    ["repository", { ...GITHUB, repository: "o/other" }],
   ])("refuses a subscription that differs only in %s", (_name, stored) => {
     expect(handle([stored], frame("unsubscribe", GITHUB))).toStrictEqual(
       error("i", "not_subscribed", "no such subscription"),
