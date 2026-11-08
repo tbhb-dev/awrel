@@ -5,10 +5,13 @@ package relayclient
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -371,22 +374,22 @@ func TestSubscribeUnsubscribeList(t *testing.T) {
 	client, _ := relay.start(t, quiet())
 
 	list, err := client.Subscribe(t.Context(), subA())
-	if err != nil || !slices.Equal(list, []protocol.Subscription{subA()}) {
+	if err != nil || !sameSubscriptions(list, subA()) {
 		t.Fatalf("Subscribe = %v, %v", list, err)
 	}
 
 	list, err = client.Subscribe(t.Context(), subB())
-	if err != nil || !slices.Equal(list, []protocol.Subscription{subA(), subB()}) {
+	if err != nil || !sameSubscriptions(list, subA(), subB()) {
 		t.Fatalf("Subscribe = %v, %v", list, err)
 	}
 
 	list, err = client.Unsubscribe(t.Context(), subA())
-	if err != nil || !slices.Equal(list, []protocol.Subscription{subB()}) {
+	if err != nil || !sameSubscriptions(list, subB()) {
 		t.Fatalf("Unsubscribe = %v, %v", list, err)
 	}
 
 	list, err = client.List(t.Context())
-	if err != nil || !slices.Equal(list, []protocol.Subscription{subB()}) {
+	if err != nil || !sameSubscriptions(list, subB()) {
 		t.Fatalf("List = %v, %v", list, err)
 	}
 }
@@ -548,7 +551,7 @@ func TestReconnectResubscribesInOrder(t *testing.T) {
 
 	// A call made right after the reconnect comes after the resubscribes.
 	list, err := client.List(t.Context())
-	if err != nil || !slices.Equal(list, []protocol.Subscription{subA(), subB()}) {
+	if err != nil || !sameSubscriptions(list, subA(), subB()) {
 		t.Fatalf("List = %v, %v", list, err)
 	}
 
@@ -558,12 +561,12 @@ func TestReconnectResubscribesInOrder(t *testing.T) {
 	}
 
 	for i, sub := range []protocol.Subscription{subA(), subB()} {
-		if frames[i].Type != typeSubscribe || frames[i].Subscription == nil || *frames[i].Subscription != sub {
+		if frames[i].Type != typeSubscribe || frames[i].Subscription == nil || !frames[i].Subscription.Equal(sub) {
 			t.Errorf("frame %d = %+v, want a subscribe of %v", i, frames[i], sub)
 		}
 	}
 
-	if frames[2].Type != "list" {
+	if frames[2].Type != requestList {
 		t.Errorf("frame 2 = %+v, want the list call", frames[2])
 	}
 }
@@ -583,14 +586,14 @@ func TestRejectedResubscribeIsDropped(t *testing.T) {
 	awaitNewSession(t, client, old)
 
 	// Read the mirror directly, because a List reply would reset it.
-	if got := mirrorOf(client); !slices.Equal(got, []protocol.Subscription{subA()}) {
+	if got := mirrorOf(client); !slices.EqualFunc(got, []protocol.Subscription{subA()}, protocol.Subscription.Equal) {
 		t.Fatalf("mirror = %v, want only the accepted subscription", got)
 	}
 
 	relay.drop()
 	eventually(t, "a third connection", func() bool { return len(relay.onConn(3)) >= 1 })
 
-	if frames := relay.onConn(3); frames[0].Type != typeSubscribe || *frames[0].Subscription != subA() {
+	if frames := relay.onConn(3); frames[0].Type != typeSubscribe || !frames[0].Subscription.Equal(subA()) {
 		t.Errorf("first frame on the third connection = %+v", frames[0])
 	}
 
@@ -666,7 +669,7 @@ func TestResubscribeTimeoutReconnects(t *testing.T) {
 	eventually(t, "a third connection", func() bool { return relay.connCount() >= 3 })
 
 	list, err := client.List(t.Context())
-	if err != nil || !slices.Equal(list, []protocol.Subscription{subA()}) {
+	if err != nil || !sameSubscriptions(list, subA()) {
 		t.Fatalf("List = %v, %v", list, err)
 	}
 
@@ -860,7 +863,7 @@ func TestShutdownClosesNormallyAndFailsPending(t *testing.T) {
 	t.Parallel()
 
 	relay := newFakeRelay(t)
-	relay.setIntercept(func(_ int, req frame) (string, bool) { return "", req.Type == "list" })
+	relay.setIntercept(func(_ int, req frame) (string, bool) { return "", req.Type == requestList })
 
 	client, stop := relay.start(t, quiet())
 
@@ -1132,6 +1135,786 @@ func TestRequestIDsAreDecimal(t *testing.T) {
 	for i, entry := range frames {
 		if want := strconv.Itoa(i + 1); entry.ID != want {
 			t.Errorf("frame %d has id %q, want %q", i, entry.ID, want)
+		}
+	}
+}
+
+const (
+	testFailure           = "failure"
+	testTimedOut          = "timed_out"
+	unsubscribeCapability = "unsubscribe capability"
+	mutatedValue          = "mutated"
+	retainedUnsubscribe   = "unsubscribe retained"
+)
+
+func filteredSub() protocol.Subscription {
+	return protocol.Subscription{
+		Provider:     providerGitHub,
+		Event:        "workflow_run",
+		Repository:   "Owner/Repo",
+		Action:       []string{"completed"},
+		Conclusion:   []string{testFailure, testFailure, testTimedOut},
+		Name:         " CI / result ",
+		WorkflowPath: ".github/workflows/ci.yml",
+	}
+}
+
+//nolint:gocognit,cyclop // exercises the entire subscribe, reconnect and remove session
+func TestFilteredSubscribeReplayAndRemove(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	client, _ := relay.start(t, quiet())
+	sub := filteredSub()
+
+	list, err := client.Subscribe(t.Context(), sub)
+	if err != nil || len(list) != 1 || !list[0].Equal(sub) {
+		t.Fatalf("subscribe: %v %v", list, err)
+	}
+
+	first := relay.onConn(1)
+	if len(first) != 2 || first[0].Type != requestList || !first[0].SubscriptionFilters ||
+		first[1].Type != typeSubscribe ||
+		!first[1].SubscriptionFilters {
+		t.Fatalf("frames: %+v", first)
+	}
+
+	list[0].Action[0] = mutatedValue
+	sub.Action[0] = mutatedValue
+	snapshot := client.snapshot()
+	snapshot[0].Conclusion[0] = mutatedValue
+
+	client.mu.Lock()
+	expectedLeft := len(client.expected)
+	client.mu.Unlock()
+
+	if expectedLeft != 0 {
+		t.Fatalf("request metadata leaked: %d", expectedLeft)
+	}
+
+	original := filteredSub()
+	if got := client.snapshot(); len(got) != 1 || !got[0].Equal(original) {
+		t.Fatalf("mirror aliased: %+v", got)
+	}
+
+	old := currentSession(client)
+
+	relay.drop()
+	awaitNewSession(t, client, old)
+
+	replay := relay.onConn(2)
+	if len(replay) != 2 || replay[0].Type != requestList || !replay[0].SubscriptionFilters ||
+		!replay[1].Subscription.Equal(original) {
+		t.Fatalf("replay: %+v", replay)
+	}
+
+	got, err := client.List(t.Context())
+	if err != nil || len(got) != 1 || !got[0].Equal(original) {
+		t.Fatalf("list: %v %v", got, err)
+	}
+
+	original.Conclusion = []string{testTimedOut, testFailure}
+
+	got, err = client.Unsubscribe(t.Context(), original)
+	if err != nil || len(got) != 0 || len(client.snapshot()) != 0 {
+		t.Fatalf("unsubscribe: %v %v", got, err)
+	}
+	// Capability is probed once per connection, including repeated subscribes.
+	_, err = client.Subscribe(t.Context(), original)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	frames := relay.onConn(2)
+	probes := 0
+
+	for _, frame := range frames {
+		if frame.Type == requestList && frame.SubscriptionFilters {
+			probes++
+		}
+	}
+
+	if probes != 1 {
+		t.Fatalf("probes = %d", probes)
+	}
+}
+
+func TestOldRelayRefusedBeforeFilteredSubscribe(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	relay.setIntercept(func(_ int, req frame) (string, bool) {
+		return `{"type":"subscriptions","id":"` + req.ID + `","subscriptions":[]}`, true
+	})
+
+	client, stop := relay.start(t, quiet())
+
+	_, err := client.Subscribe(t.Context(), filteredSub())
+	if !errors.Is(err, ErrRelayTooOld) {
+		t.Fatalf("error: %v", err)
+	}
+
+	stop()
+
+	frames := relay.received()
+	if len(frames) != 1 || frames[0].frame.Type != requestList || !frames[0].frame.SubscriptionFilters {
+		t.Fatalf("frames: %+v", frames)
+	}
+
+	_, err = client.Subscribe(t.Context(), subA())
+	if !errors.Is(err, ErrRelayTooOld) {
+		t.Fatalf("terminal error: %v", err)
+	}
+
+	if len(client.snapshot()) != 0 || relay.dials.Load() != 1 {
+		t.Fatal("changed mirror or retried incompatible relay")
+	}
+
+	if !strings.Contains(ErrRelayTooOld.Error(), "relay too old") {
+		t.Fatal(ErrRelayTooOld)
+	}
+}
+
+//nolint:gocognit,cyclop // each fake reply omits a different contract field
+func TestFilterEchoMismatch(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{
+		"missing capability", "false capability", "null capability", "string capability",
+		unsubscribeCapability,
+		"dropped action", "dropped conclusion", "dropped name",
+		"dropped path", retainedUnsubscribe,
+	} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			relay := newFakeRelay(t)
+			relay.setIntercept(func(_ int, req frame) (string, bool) {
+				if req.Type == requestList {
+					return "", false
+				}
+
+				if (mode == retainedUnsubscribe || mode == unsubscribeCapability) && req.Type == typeSubscribe {
+					return "", false
+				}
+
+				sub := *req.Subscription
+				capability := `,"subscription_filters":true`
+
+				switch mode {
+				case "missing capability", unsubscribeCapability:
+					capability = ""
+				case "false capability":
+					capability = `,"subscription_filters":false`
+				case "null capability":
+					capability = `,"subscription_filters":null`
+				case "string capability":
+					capability = `,"subscription_filters":"true"`
+				case "dropped action":
+					sub.Action = nil
+				case "dropped conclusion":
+					sub.Conclusion = nil
+				case "dropped name":
+					sub.Name = ""
+				case "dropped path":
+					sub.WorkflowPath = ""
+				}
+
+				data := subscriptionJSON(t, []protocol.Subscription{sub})
+
+				return `{"type":"subscriptions","id":"` + req.ID + `"` + capability + `,"subscriptions":` + string(
+					data,
+				) + `}`, true
+			})
+			client, stop := relay.start(t, quiet())
+
+			_, err := client.Subscribe(t.Context(), filteredSub())
+			if mode == retainedUnsubscribe || mode == unsubscribeCapability {
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				_, err = client.Unsubscribe(t.Context(), filteredSub())
+			}
+
+			if !errors.Is(err, ErrRelayTooOld) {
+				t.Fatalf("error: %v", err)
+			}
+
+			stop()
+
+			want := 0
+			if mode == retainedUnsubscribe || mode == unsubscribeCapability {
+				want = 1
+			}
+
+			if len(client.snapshot()) != want {
+				t.Fatal("invalid reply replaced mirror")
+			}
+		})
+	}
+}
+
+func TestReconnectRechecksFilters(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	client, stop := relay.start(t, quiet())
+
+	sub := filteredSub()
+
+	_, err := client.Subscribe(t.Context(), sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secondProbe := make(chan struct{})
+
+	relay.setIntercept(func(conn int, req frame) (string, bool) {
+		if conn == 2 {
+			close(secondProbe)
+
+			return `{"type":"subscriptions","id":"` + req.ID + `","subscriptions":[]}`, true
+		}
+
+		return "", false
+	})
+	relay.drop()
+	receive(t, secondProbe, "second capability probe")
+	eventually(t, "incompatibility", client.incompatible.Load)
+	stop()
+
+	if relay.connCount() != 2 || len(relay.onConn(2)) != 1 {
+		t.Fatal("sent filtered subscription or retried")
+	}
+
+	if got := client.snapshot(); len(got) != 1 || !got[0].Equal(sub) {
+		t.Fatalf("mirror lost filters: %+v", got)
+	}
+}
+
+func TestFilteredEventsGatedUntilAcknowledgement(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	events := make(chan protocol.Event, 4)
+	opts := quiet()
+	opts.OnEvent = func(_ context.Context, event protocol.Event) { events <- event }
+	request := make(chan frame, 1)
+
+	relay.setIntercept(func(_ int, req frame) (string, bool) {
+		if req.Type == typeSubscribe {
+			request <- req
+
+			return "", true
+		}
+
+		return "", false
+	})
+	client, _ := relay.start(t, opts)
+	done := make(chan error, 1)
+
+	go func() { _, err := client.Subscribe(t.Context(), filteredSub()); done <- err }()
+
+	req := receive(t, request, "filtered subscribe")
+	event := `{"type":"event","provider":"github","event":"workflow_run",` +
+		`"delivery":"before","repository":"owner/repo","payload":{}}`
+	relay.push(t, event)
+
+	data := subscriptionJSON(t, []protocol.Subscription{filteredSub().Canonical()})
+	relay.push(
+		t,
+		`{"type":"subscriptions","id":"`+req.ID+`","subscription_filters":true,"subscriptions":`+string(data)+`}`,
+	)
+
+	err := receive(t, done, "subscribe reply")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	relay.push(t, strings.Replace(event, "before", "after", 1))
+
+	if got := receive(t, events, "acknowledged event"); got.Delivery != "after" {
+		t.Fatal("delivered before acknowledgement")
+	}
+}
+
+func TestCanonicalRemovalAndCopies(t *testing.T) {
+	t.Parallel()
+
+	client := New(quiet())
+	first := filteredSub()
+	second := first
+	second.Name = "other"
+	client.replaceMirror([]protocol.Subscription{first, second})
+	first.Conclusion = []string{testTimedOut, testFailure, testTimedOut}
+	first.Repository = "OWNER/REPO"
+	client.dropFromMirror(first)
+
+	got := client.snapshot()
+	if len(got) != 1 || !got[0].Equal(second) {
+		t.Fatalf("mirror: %+v", got)
+	}
+}
+
+func TestLocalAttachmentBoundary(t *testing.T) {
+	t.Parallel()
+
+	target := protocol.Subscription{
+		Provider:     providerGitHub,
+		Event:        "workflow_run",
+		Repository:   "o/target",
+		WorkflowPath: "x",
+	}
+
+	var base []protocol.Subscription
+	for protocol.AttachmentBudget-protocol.AttachmentBytes(append(slices.Clone(base), target)) > 255 {
+		base = append(
+			base,
+			protocol.Subscription{Provider: providerGitHub, Event: "push", Repository: fmt.Sprintf("o/r%d", len(base))},
+		)
+	}
+
+	gap := protocol.AttachmentBudget - protocol.AttachmentBytes(append(slices.Clone(base), target))
+	target.WorkflowPath = strings.Repeat("x", gap+1)
+
+	candidate := append(slices.Clone(base), target)
+	if got := protocol.AttachmentBytes(candidate); got != 12288 {
+		t.Fatalf("boundary: %d", got)
+	}
+
+	relay := newFakeRelay(t)
+	client, _ := relay.start(t, quiet())
+	// Seed the mirror with a valid attachment to isolate the local budget estimate.
+	client.replaceMirror(base)
+
+	_, err := client.Subscribe(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client.replaceMirror(base)
+
+	target.WorkflowPath += "x"
+	if got := protocol.AttachmentBytes(append(slices.Clone(base), target)); got != 12289 {
+		t.Fatalf("one byte over budget = %d", got)
+	}
+
+	before := len(relay.received())
+	_, err = client.Subscribe(t.Context(), target)
+
+	var relayErr *protocol.Error
+	if !errors.As(err, &relayErr) || relayErr.Code != "limit" ||
+		relayErr.Message != "subscriptions would exceed 12288 bytes" {
+		t.Fatalf("limit: %v", err)
+	}
+
+	if len(relay.received()) != before {
+		t.Fatal("over-budget request sent")
+	}
+	// Repeating a subscription at the boundary fits the same attachment.
+	target.WorkflowPath = strings.TrimSuffix(target.WorkflowPath, "x")
+
+	client.replaceMirror(candidate)
+
+	_, err = client.Subscribe(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInvalidFilterRejectedLocally(t *testing.T) {
+	t.Parallel()
+
+	client := New(quiet())
+	sub := filteredSub()
+
+	sub.Action = []string{}
+
+	_, err := client.Subscribe(t.Context(), sub)
+	if errors.Unwrap(err) == nil || err.Error() != "subscription: bad subscription filter: action needs 1 to 8 values" {
+		t.Fatal("invalid filter cause missing")
+	}
+}
+
+func TestFilteredUnsubscribeFirstProbes(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	client, _ := relay.start(t, quiet())
+	_, err := client.Unsubscribe(t.Context(), filteredSub())
+
+	var relayErr *protocol.Error
+	if !errors.As(err, &relayErr) || relayErr.Code != "not_subscribed" {
+		t.Fatalf("%v", err)
+	}
+
+	frames := relay.onConn(1)
+	if len(frames) != 2 || frames[0].Type != requestList || !frames[1].SubscriptionFilters {
+		t.Fatalf("%+v", frames)
+	}
+}
+
+func TestMessageBoundary(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	client, _ := relay.start(t, quiet())
+
+	sess, err := client.acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, size := range []int{4096, 4097} {
+		build := func(id string) []byte {
+			data := protocol.EncodeList(id)
+
+			return append(data, []byte(strings.Repeat(" ", size-len(data)))...)
+		}
+
+		_, err = client.roundTrip(t.Context(), sess, build)
+		if size == 4096 && err != nil {
+			t.Fatal(err)
+		}
+
+		if size == 4097 && (err == nil || err.Error() != "bad_message: messages must be at most 4096 bytes") {
+			t.Fatalf("error: %v", err)
+		}
+	}
+
+	if len(relay.received()) != 1 {
+		t.Fatal("oversized message sent")
+	}
+}
+
+func TestIncompatibleConnectionSuppressesEventsAndPendingCalls(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+
+	conn, err := relay.dial(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { ignore(conn.Close()) }()
+
+	client := New(quiet())
+	client.incompatible.Store(true)
+	client.opts.OnEvent = func(context.Context, protocol.Event) { t.Error("incompatible event delivered") }
+	client.handle(t.Context(), protocol.Event{Repository: nil, Provider: "", Event: "", Delivery: "", Payload: nil})
+
+	_, err = client.subscriptionTrip(
+		t.Context(),
+		&session{conn: conn, done: make(chan struct{})},
+		requestSubscribe,
+		filteredSub(),
+	)
+	if !errors.Is(err, ErrRelayTooOld) {
+		t.Fatalf("queued subscription error: %v", err)
+	}
+
+	done := make(chan struct{})
+	close(done)
+
+	_, err = client.roundTrip(t.Context(), &session{conn: conn, done: done}, protocol.EncodeList)
+	if !errors.Is(err, ErrRelayTooOld) {
+		t.Fatalf("pending error: %v", err)
+	}
+}
+
+func sameSubscriptions(got []protocol.Subscription, want ...protocol.Subscription) bool {
+	return slices.EqualFunc(got, want, protocol.Subscription.Equal)
+}
+
+func subscriptionJSON(t *testing.T, subs []protocol.Subscription) []byte {
+	t.Helper()
+
+	data, err := json.Marshal(subs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return data
+}
+
+func TestFilteredReplayRefusalPreservesMirror(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	client, stop := relay.start(t, quiet())
+	sub := filteredSub()
+
+	_, err := client.Subscribe(t.Context(), sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	relay.setRefuse(sub.Canonical())
+	relay.drop()
+	eventually(t, "replay refusal", client.incompatible.Load)
+	stop()
+
+	if got := client.snapshot(); len(got) != 1 || !got[0].Equal(sub) {
+		t.Fatalf("mirror = %+v", got)
+	}
+
+	if relay.connCount() != 2 {
+		t.Fatal("retried rejected filters")
+	}
+}
+
+func TestFilteredTimeoutClosesConnection(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	relay.setIntercept(silenceSubscribesOn(1))
+
+	opts := quiet()
+	opts.RequestTimeout = 100 * time.Millisecond
+	client, stop := relay.start(t, opts)
+	awaitConnected(t, client)
+
+	_, err := client.Subscribe(t.Context(), filteredSub())
+	if !errors.Is(err, ErrNoAnswer) {
+		t.Fatalf("timeout = %v", err)
+	}
+
+	receive(t, relay.closed, "closed filtered connection")
+	stop()
+
+	if len(client.snapshot()) != 0 {
+		t.Fatal("unacknowledged filters stored")
+	}
+}
+
+func TestUnsolicitedListCannotChangeMirror(t *testing.T) {
+	t.Parallel()
+
+	client := New(quiet())
+	sub := filteredSub()
+	client.replaceMirror([]protocol.Subscription{sub})
+	client.handle(t.Context(), protocol.Subscriptions{ID: "orphan", Subscriptions: []protocol.Subscription{}})
+
+	if got := client.snapshot(); len(got) != 1 || !got[0].Equal(sub) {
+		t.Fatalf("unsolicited reply changed mirror: %+v", got)
+	}
+}
+
+func TestReconnectSubscribeEchoKeepsCompleteMirror(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	client, stop := relay.start(t, quiet())
+	first := filteredSub()
+	second := first
+	second.Name = "other"
+
+	mustSubscribe(t, client, first)
+	mustSubscribe(t, client, second)
+	relay.setIntercept(func(conn int, req frame) (string, bool) {
+		if conn == 2 && req.Type == typeSubscribe && req.Subscription.Name == second.Name {
+			return `{"type":"subscriptions","id":"` + req.ID + `","subscriptions":[]}`, true
+		}
+
+		return "", false
+	})
+	relay.drop()
+	eventually(t, "replay echo mismatch", client.incompatible.Load)
+	stop()
+
+	if got := client.snapshot(); !sameSubscriptions(got, first, second) {
+		t.Fatalf("partial replay lost mirror: %+v", got)
+	}
+
+	frames := relay.onConn(2)
+	if len(frames) != 3 || frames[0].Type != requestList || !frames[1].Subscription.Equal(first) ||
+		!frames[2].Subscription.Equal(second) {
+		t.Fatalf("replay frames: %+v", frames)
+	}
+}
+
+func TestReplyValidationBeforeMirrorChanges(t *testing.T) {
+	t.Parallel()
+
+	sub := filteredSub().Canonical()
+	old := subA()
+
+	cases := []struct {
+		name                                                 string
+		expected                                             expectation
+		registered, replaying, capability, accepted, changed bool
+	}{
+		{
+			"unfiltered list",
+			expectation{kind: requestList, subscription: nil, filters: false},
+			true,
+			false,
+			false,
+			true,
+			true,
+		},
+		{
+			"filtered subscribe",
+			expectation{kind: requestSubscribe, subscription: &sub, filters: true},
+			true,
+			false,
+			true,
+			true,
+			true,
+		},
+		{
+			"capability probe",
+			expectation{kind: requestList, subscription: nil, filters: true},
+			true,
+			false,
+			true,
+			true,
+			false,
+		},
+		{
+			"unregistered reply",
+			expectation{kind: requestList, subscription: nil, filters: false},
+			false,
+			false,
+			false,
+			true,
+			false,
+		},
+		{
+			"replay reply",
+			expectation{kind: requestSubscribe, subscription: &sub, filters: true},
+			true,
+			true,
+			true,
+			true,
+			false,
+		},
+		{
+			"invalid capability",
+			expectation{kind: requestSubscribe, subscription: &sub, filters: true},
+			true,
+			false,
+			false,
+			false,
+			false,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := New(quiet())
+			client.replaceMirror([]protocol.Subscription{old})
+			client.replaying.Store(test.replaying)
+
+			if test.registered {
+				client.register("reply", newSignal[reply](), test.expected)
+			}
+
+			got := client.handle(
+				t.Context(),
+				protocol.Subscriptions{
+					ID:                  "reply",
+					Subscriptions:       []protocol.Subscription{sub},
+					SubscriptionFilters: test.capability,
+				},
+			)
+			if got != test.accepted {
+				t.Fatalf("accepted = %v", got)
+			}
+
+			want := old
+			if test.changed {
+				want = sub
+			}
+
+			if subs := client.snapshot(); !sameSubscriptions(subs, want) {
+				t.Fatalf("mirror = %+v", subs)
+			}
+		})
+	}
+}
+
+func TestIncompatibleSubscribeStopsRun(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	relay.setIntercept(func(_ int, req frame) (string, bool) {
+		if req.Type == typeSubscribe {
+			return `{"type":"subscriptions","id":"` + req.ID + `","subscriptions":[]}`, true
+		}
+
+		return "", false
+	})
+
+	opts := quiet()
+	opts.Dial = relay.dial
+	client := New(opts)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	finished := make(chan error, 1)
+	go func() { finished <- client.Run(ctx) }()
+
+	_, err := client.Subscribe(t.Context(), filteredSub())
+	if !errors.Is(err, ErrRelayTooOld) {
+		t.Fatalf("subscribe = %v", err)
+	}
+
+	err = receive(t, finished, "incompatible Run exit")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if relay.dials.Load() != 1 {
+		t.Fatal("retried incompatible relay")
+	}
+}
+
+func TestRejectedFilteredReplayStopsRun(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	opts := quiet()
+	opts.Dial = relay.dial
+	client := New(opts)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	finished := make(chan error, 1)
+	go func() { finished <- client.Run(ctx) }()
+
+	sub := filteredSub()
+	mustSubscribe(t, client, sub)
+	relay.setRefuse(sub.Canonical())
+	relay.drop()
+
+	err := receive(t, finished, "rejected replay Run exit")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !errors.Is(client.cause(), ErrRelayTooOld) {
+		t.Fatal("filtered replay reported success")
+	}
+
+	if got := client.snapshot(); !sameSubscriptions(got, sub) {
+		t.Fatalf("mirror = %+v", got)
+	}
+}
+
+func TestProbeTimeoutClosesConnection(t *testing.T) {
+	t.Parallel()
+	relay := newFakeRelay(t)
+	relay.setIntercept(func(_ int, req frame) (string, bool) { return "", req.SubscriptionFilters })
+
+	opts := quiet()
+	opts.RequestTimeout = 100 * time.Millisecond
+	client, stop := relay.start(t, opts)
+	awaitConnected(t, client)
+
+	_, err := client.Subscribe(t.Context(), filteredSub())
+	if !errors.Is(err, ErrNoAnswer) {
+		t.Fatalf("probe = %v", err)
+	}
+
+	receive(t, relay.closed, "closed probe timeout connection")
+	stop()
+
+	for _, msg := range relay.received() {
+		if msg.frame.Type == typeSubscribe {
+			t.Fatal("sent subscribe without probe acknowledgement")
 		}
 	}
 }

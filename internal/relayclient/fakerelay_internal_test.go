@@ -59,9 +59,10 @@ var errDial = errors.New("dial failed")
 
 // frame is a client message as the fake relay sees it.
 type frame struct {
-	Subscription *protocol.Subscription `json:"subscription"`
-	Type         string                 `json:"type"`
-	ID           string                 `json:"id"`
+	Subscription        *protocol.Subscription `json:"subscription"`
+	Type                string                 `json:"type"`
+	ID                  string                 `json:"id"`
+	SubscriptionFilters bool                   `json:"subscription_filters"` //nolint:tagliatelle // relay wire field
 }
 
 // seen is a frame together with the connection it arrived on, counted from 1.
@@ -197,19 +198,22 @@ func (f *fakeRelay) answer(number int, msg frame, list *[]protocol.Subscription)
 
 		return `{"type":"pong"}`
 	case typeSubscribe:
-		if slices.Contains(refuse, *msg.Subscription) {
+		if slices.ContainsFunc(refuse, msg.Subscription.Equal) {
 			return `{"type":"error","id":"` + msg.ID + `","code":"limit","message":"full"}`
 		}
 
-		if !slices.Contains(*list, *msg.Subscription) {
+		if !slices.ContainsFunc(*list, msg.Subscription.Equal) {
 			*list = append(*list, *msg.Subscription)
 		}
 	case "unsubscribe":
-		if !slices.Contains(*list, *msg.Subscription) {
+		if !slices.ContainsFunc(*list, msg.Subscription.Equal) {
 			return `{"type":"error","id":"` + msg.ID + `","code":"not_subscribed","message":"absent"}`
 		}
 
-		*list = slices.DeleteFunc(*list, func(other protocol.Subscription) bool { return other == *msg.Subscription })
+		*list = slices.DeleteFunc(
+			*list,
+			func(other protocol.Subscription) bool { return other.Equal(*msg.Subscription) },
+		)
 	}
 
 	body, err := json.Marshal(*list)
@@ -217,7 +221,12 @@ func (f *fakeRelay) answer(number int, msg frame, list *[]protocol.Subscription)
 		body = []byte("[]")
 	}
 
-	return `{"type":"subscriptions","id":"` + msg.ID + `","subscriptions":` + string(body) + `}`
+	capability := ""
+	if msg.SubscriptionFilters {
+		capability = `,"subscription_filters":true`
+	}
+
+	return `{"type":"subscriptions"` + capability + `,"id":"` + msg.ID + `","subscriptions":` + string(body) + `}`
 }
 
 // push sends a raw frame on the current connection.

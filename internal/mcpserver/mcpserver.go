@@ -22,11 +22,17 @@ import (
 )
 
 // Instructions is the text the server gives the agent when it connects.
+//
+//nolint:dupl // the test pins the user-facing instructions independently
 const Instructions = "awrel relays webhook events into this session. " +
 	"Today the only provider is GitHub. " +
 	"Call `subscribe` with provider \"github\", an event name " +
 	"(the X-GitHub-Event value, such as \"pull_request\") and a repository \"owner/name\". " +
 	"Subscribe once per event and repository pair; anything less is refused. " +
+	"Optional action and conclusion lists match any listed value; all supplied filters must match. " +
+	"Names and workflow paths match exactly, including case and spaces. " +
+	"Copy filters from list_subscriptions to remove that exact subscription. " +
+	"Compare check head_sha with the current pull request head before acting on success. " +
 	"Matching events arrive as `<channel source=\"awrel\" ...>` tags with attributes " +
 	"provider, event, action, repository, delivery and compact, " +
 	"with the webhook's JSON payload as the body. " +
@@ -75,18 +81,38 @@ type Options struct {
 }
 
 // SubscriptionArgs is the input of the subscribe tool.
+//
+//nolint:govet // field order permits conversion to protocol.Subscription
 type SubscriptionArgs struct {
 	Provider   string `json:"provider"   jsonschema:"webhook provider; only \"github\" today"`
-	Event      string `json:"event"      jsonschema:"required for github: event name, such as pull_request or issue_comment (GitHub's X-GitHub-Event)"` //nolint:lll // a struct tag can't wrap
+	Event      string `json:"event"      jsonschema:"required for github: X-GitHub-Event name, such as pull_request"`
 	Repository string `json:"repository" jsonschema:"required for github: owner/name"`
+	//exhaustruct:optional
+	Action []string `json:"action,omitempty"`
+	//exhaustruct:optional
+	Conclusion []string `json:"conclusion,omitempty"`
+	//exhaustruct:optional
+	Name string `json:"name,omitempty"`
+	//exhaustruct:optional
+	WorkflowPath string `json:"workflow_path,omitempty"` //nolint:tagliatelle // relay wire field
 }
 
 // UnsubscribeArgs is the input of the unsubscribe tool, including older
 // subscriptions without an event or repository.
+//
+//nolint:govet // field order permits conversion to protocol.Subscription
 type UnsubscribeArgs struct {
 	Provider   string `json:"provider"             jsonschema:"webhook provider; only \"github\" today"`
 	Event      string `json:"event,omitempty"      jsonschema:"event name of the subscription to remove"`
 	Repository string `json:"repository,omitempty" jsonschema:"owner/name of the subscription to remove"`
+	//exhaustruct:optional
+	Action []string `json:"action,omitempty"`
+	//exhaustruct:optional
+	Conclusion []string `json:"conclusion,omitempty"`
+	//exhaustruct:optional
+	Name string `json:"name,omitempty"`
+	//exhaustruct:optional
+	WorkflowPath string `json:"workflow_path,omitempty"` //nolint:tagliatelle // relay wire field
 }
 
 // ListArgs is the input of the tool that lists subscriptions, which takes none.
@@ -150,10 +176,12 @@ func New(opts Options) *Server {
 
 	mcp.AddTool(server.server, &mcp.Tool{
 		Name:        "subscribe",
+		InputSchema: subscriptionSchema(`["provider","event","repository"]`),
 		Description: "Start receiving matching webhook events in this session.",
 	}, server.subscribe)
 	mcp.AddTool(server.server, &mcp.Tool{
 		Name:        "unsubscribe",
+		InputSchema: subscriptionSchema(`["provider"]`),
 		Description: "Stop receiving the events a subscription matched.",
 	}, server.unsubscribe)
 	mcp.AddTool(server.server, &mcp.Tool{
@@ -263,7 +291,15 @@ func (s *Server) subscribe(
 		return nil, SubscriptionsResult{Subscriptions: nil}, errIncompleteSubscription
 	}
 
-	subs, err := s.relay.Subscribe(ctx, protocol.Subscription(args))
+	sub := protocol.Subscription(args)
+
+	err := sub.ValidateFilters()
+	if err != nil {
+		// gomutants:disable-next-line RETURN_ZERO reason="a failed handler's output is ignored"
+		return nil, SubscriptionsResult{Subscriptions: nil}, fmt.Errorf("subscription: %w", err)
+	}
+
+	subs, err := s.relay.Subscribe(ctx, sub.Canonical())
 
 	return nil, SubscriptionsResult{Subscriptions: subs}, err //nolint:wrapcheck // the relay's text is the tool's error
 }
@@ -271,7 +307,15 @@ func (s *Server) subscribe(
 func (s *Server) unsubscribe(
 	ctx context.Context, _ *mcp.CallToolRequest, args UnsubscribeArgs,
 ) (*mcp.CallToolResult, SubscriptionsResult, error) {
-	subs, err := s.relay.Unsubscribe(ctx, protocol.Subscription(args))
+	sub := protocol.Subscription(args)
+
+	err := sub.ValidateFilters()
+	if err != nil {
+		// gomutants:disable-next-line RETURN_ZERO reason="a failed handler's output is ignored"
+		return nil, SubscriptionsResult{Subscriptions: nil}, fmt.Errorf("subscription: %w", err)
+	}
+
+	subs, err := s.relay.Unsubscribe(ctx, sub.Canonical())
 
 	return nil, SubscriptionsResult{Subscriptions: subs}, err //nolint:wrapcheck // the relay's text is the tool's error
 }
@@ -348,4 +392,35 @@ func (t *notifyingTransport) connection() mcp.Connection { //nolint:ireturn // t
 	defer t.mu.Unlock()
 
 	return t.conn
+}
+
+// subscriptionSchema bounds tool input before decoding into Go values.
+func subscriptionSchema(required string) json.RawMessage {
+	return json.RawMessage(`{
+	"type":"object", "additionalProperties":false, "required":` + required + `,
+	"properties":{
+	"provider":{"type":"string", "pattern":"^[a-z0-9-]{1,32}$", "description":"Webhook provider; only github today."},
+	"event":{"type":"string", "pattern":"^[a-z0-9_.-]{1,64}$",
+	"description":"GitHub event name; required with repository for filters."},
+	"repository":{"type":"string", "pattern":"^[A-Za-z0-9_.-]{1,39}/[A-Za-z0-9_.-]{1,100}$",
+	"description":"owner/name; required with event for filters."},
+	"action":{"type":"array", "minItems":1, "maxItems":8,
+	"items":{"type":"string", "pattern":"^[a-z0-9_.-]{1,64}$"},
+	"description":"GitHub action-bearing events only; push, create and delete are unsupported. ` +
+		`Any listed action matches, such as completed or created. Unknown values match literally; check spelling."},
+	"conclusion":{"type":"array", "minItems":1, "maxItems":8,
+	"items":{"type":"string", "pattern":"^[a-z0-9_.-]{1,64}$"},
+	"description":"GitHub check_run, check_suite, workflow_run or workflow_job only. ` +
+		`Any listed conclusion matches: success, failure, neutral, cancelled, skipped, timed_out, ` +
+		`action_required, stale, startup_failure. Future values match literally; check spelling. ` +
+		`Add action completed when needed."},
+	"name":{"type":"string", "pattern":"^[\\x20-\\x7e]{1,128}$",
+	"description":"GitHub check_run, workflow_run or workflow_job only. ` +
+		`Exact name, preserving case and spaces; wildcard characters are literal. ` +
+		`Copy the delivered name, including caller prefixes."},
+	"workflow_path":{"type":"string", "pattern":"^[A-Za-z0-9_./-]{1,256}$",
+	"description":"GitHub workflow_run only. Exact workflow_run.path, such as .github/workflows/ci.yml. ` +
+		`No normalization."}
+	}
+}`)
 }

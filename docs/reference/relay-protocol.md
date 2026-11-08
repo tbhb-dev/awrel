@@ -3,11 +3,12 @@ description: The messages that the awrel server and the relay Durable Object exc
 generated:
   - role: generated
     harness: claude-code:2.1.319
-    model: anthropic:claude-opus-5-5
+    model: anthropic:claude-sonnet-5-5
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-08T02:35:53Z"
+    subagent: sha-256-64:95a8c6deb0220742
+    at: "2026-11-08T03:43:57Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -96,4 +97,4 @@ Clients ignore message types they don't know. For a client message type the serv
 
 ## Reconnecting
 
-A reconnect begins with an empty list. Before anything else, the client sends one `subscribe` per subscription it held, in order. The server drops events from a period without a socket permanently.
+A reconnect begins with an empty list. Before replaying its first filtered subscription, the Go client probes with a list request with `subscription_filters: true` and requires the capability echo. It then sends one `subscribe` per subscription it held, in order, retaining all filters. It checks capability echoes on every filtered subscribe and unsubscribe reply, and checks that the exact canonical subscription is present after subscribe and absent after unsubscribe. A missing or changed echo closes the socket and stops retries with a relay-too-old error. While validating filtered requests and reconnect replay, the client suppresses events. Older relays still work with unfiltered clients, which don't require a capability echo. The server drops events from a period without a socket permanently.

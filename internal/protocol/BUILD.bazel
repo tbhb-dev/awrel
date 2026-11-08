@@ -8,7 +8,10 @@ repo_files()
 
 go_library(
     name = "protocol",
-    srcs = ["protocol.go"],
+    srcs = [
+        "filters.go",
+        "protocol.go",
+    ],
     importpath = "go.tbhb.dev/awrel/internal/protocol",
     visibility = ["//:__subpackages__"],
 )
