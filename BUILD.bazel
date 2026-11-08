@@ -438,8 +438,10 @@ workers_vitest_test(
     tags = ["worker"],
 )
 
+# The mutation run outlasts the 300 s default on shared CI runners.
 workers_stryker_test(
     name = "stryker_test",
+    timeout = "long",
     srcs = WORKER,
     node_modules = [":node_modules"],
     tags = [
