@@ -372,6 +372,7 @@ func TestSubscribeUnsubscribeList(t *testing.T) {
 	relay := newFakeRelay(t)
 	relay.setRefuse(refusedSub())
 	client, _ := relay.start(t, quiet())
+	awaitConnected(t, client)
 
 	list, err := client.Subscribe(t.Context(), subA())
 	if err != nil || !sameSubscriptions(list, subA()) {
@@ -400,6 +401,7 @@ func TestRelayErrorReplies(t *testing.T) {
 	relay := newFakeRelay(t)
 	relay.setRefuse(refusedSub())
 	client, _ := relay.start(t, quiet())
+	awaitReady(t, client)
 
 	_, err := client.Subscribe(t.Context(), subA())
 	if err != nil {
@@ -543,11 +545,14 @@ func TestReconnectResubscribesInOrder(t *testing.T) {
 
 	relay := newFakeRelay(t)
 	client, _ := relay.start(t, quiet())
+	awaitConnected(t, client)
 
 	mustSubscribe(t, client, subA(), subB())
 
+	old := currentSession(client)
+
 	relay.drop()
-	eventually(t, "two resubscribes", func() bool { return len(relay.onConn(2)) >= 2 })
+	awaitNewSession(t, client, old)
 
 	// A call made right after the reconnect comes after the resubscribes.
 	list, err := client.List(t.Context())
@@ -576,6 +581,7 @@ func TestRejectedResubscribeIsDropped(t *testing.T) {
 
 	relay := newFakeRelay(t)
 	client, _ := relay.start(t, quiet())
+	awaitConnected(t, client)
 
 	mustSubscribe(t, client, subA(), subB())
 
@@ -590,8 +596,10 @@ func TestRejectedResubscribeIsDropped(t *testing.T) {
 		t.Fatalf("mirror = %v, want only the accepted subscription", got)
 	}
 
+	old = currentSession(client)
+
 	relay.drop()
-	eventually(t, "a third connection", func() bool { return len(relay.onConn(3)) >= 1 })
+	awaitNewSession(t, client, old)
 
 	if frames := relay.onConn(3); frames[0].Type != typeSubscribe || !frames[0].Subscription.Equal(subA()) {
 		t.Errorf("first frame on the third connection = %+v", frames[0])
@@ -620,6 +628,7 @@ func TestEveryResubscribeRejected(t *testing.T) {
 
 	relay := newFakeRelay(t)
 	client, _ := relay.start(t, quiet())
+	awaitConnected(t, client)
 
 	mustSubscribe(t, client, subA(), subB())
 
@@ -633,8 +642,10 @@ func TestEveryResubscribeRejected(t *testing.T) {
 		t.Fatalf("mirror = %v, want it empty", got)
 	}
 
+	old = currentSession(client)
+
 	relay.drop()
-	eventually(t, "a third connection", func() bool { return relay.connCount() >= 3 })
+	awaitNewSession(t, client, old)
 
 	_, err := client.List(t.Context())
 	if err != nil {
@@ -738,10 +749,7 @@ func TestKeepalivePings(t *testing.T) {
 	opts.PongTimeout = waitLimit
 	client, _ := relay.start(t, opts)
 
-	_, err := client.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	awaitConnected(t, client)
 
 	eventually(t, "three pings answered", func() bool {
 		pings := 0
@@ -771,10 +779,7 @@ func TestMissingPongReconnects(t *testing.T) {
 	opts.PongTimeout = 2 * tick
 	client, _ := relay.start(t, opts)
 
-	_, err := client.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	awaitConnected(t, client)
 
 	eventually(t, "a second connection", func() bool { return relay.connCount() >= 2 })
 }
@@ -790,10 +795,7 @@ func TestStalePongDoesNotAnswerAPing(t *testing.T) {
 	opts.PongTimeout = 100 * time.Millisecond
 	client, _ := relay.start(t, opts)
 
-	_, err := client.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	awaitConnected(t, client)
 
 	// Send unsolicited pongs before the first ping. The second finds the
 	// one-slot channel full.
@@ -878,10 +880,7 @@ func TestEventsInOrderAndNoise(t *testing.T) {
 	opts.OnEvent = func(_ context.Context, ev protocol.Event) { events <- ev }
 	client, _ := relay.start(t, opts)
 
-	_, err := client.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	awaitConnected(t, client)
 
 	relay.push(
 		t,
@@ -917,6 +916,7 @@ func TestShutdownClosesNormallyAndFailsPending(t *testing.T) {
 	relay.setIntercept(func(_ int, req frame) (string, bool) { return "", req.Type == requestList })
 
 	client, stop := relay.start(t, quiet())
+	awaitReady(t, client)
 
 	failed := make(chan error, 1)
 
@@ -996,6 +996,7 @@ func TestConcurrentCalls(t *testing.T) {
 
 	relay := newFakeRelay(t)
 	client, _ := relay.start(t, quiet())
+	awaitConnected(t, client)
 
 	var group sync.WaitGroup
 
@@ -1021,10 +1022,7 @@ func TestShutdownWhileAwaitingPong(t *testing.T) {
 	opts.PingInterval = tick
 	client, stop := relay.start(t, opts)
 
-	_, err := client.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	awaitConnected(t, client)
 
 	eventually(t, "a ping", func() bool { return len(relay.onConn(1)) >= 2 })
 	stop()
@@ -1147,10 +1145,7 @@ func TestShutdownCloseIsLogged(t *testing.T) {
 	opts, logs := loud()
 	client, stop := relay.start(t, opts)
 
-	_, err := client.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	awaitConnected(t, client)
 
 	stop()
 
@@ -1170,6 +1165,7 @@ func TestRequestIDsAreDecimal(t *testing.T) {
 
 	relay := newFakeRelay(t)
 	client, _ := relay.start(t, quiet())
+	awaitReady(t, client)
 
 	for range requests {
 		_, err := client.List(t.Context())
@@ -1215,6 +1211,8 @@ func TestFilteredSubscribeReplayAndRemove(t *testing.T) {
 	t.Parallel()
 	relay := newFakeRelay(t)
 	client, _ := relay.start(t, quiet())
+	awaitReady(t, client)
+
 	sub := filteredSub()
 
 	list, err := client.Subscribe(t.Context(), sub)
@@ -1297,6 +1295,7 @@ func TestOldRelayRefusedBeforeFilteredSubscribe(t *testing.T) {
 	})
 
 	client, stop := relay.start(t, quiet())
+	awaitReady(t, client)
 
 	_, err := client.Subscribe(t.Context(), filteredSub())
 	if !errors.Is(err, ErrRelayTooOld) {
@@ -1375,6 +1374,7 @@ func TestFilterEchoMismatch(t *testing.T) {
 				) + `}`, true
 			})
 			client, stop := relay.start(t, quiet())
+			awaitConnected(t, client)
 
 			_, err := client.Subscribe(t.Context(), filteredSub())
 			if mode == retainedUnsubscribe || mode == unsubscribeCapability {
@@ -1407,6 +1407,7 @@ func TestReconnectRechecksFilters(t *testing.T) {
 	t.Parallel()
 	relay := newFakeRelay(t)
 	client, stop := relay.start(t, quiet())
+	awaitConnected(t, client)
 
 	sub := filteredSub()
 
@@ -1458,6 +1459,8 @@ func TestFilteredEventsGatedUntilAcknowledgement(t *testing.T) {
 		return "", false
 	})
 	client, _ := relay.start(t, opts)
+	awaitConnected(t, client)
+
 	done := make(chan error, 1)
 
 	go func() { _, err := client.Subscribe(t.Context(), filteredSub()); done <- err }()
@@ -1588,6 +1591,7 @@ func TestFilteredUnsubscribeFirstProbes(t *testing.T) {
 	t.Parallel()
 	relay := newFakeRelay(t)
 	client, _ := relay.start(t, quiet())
+	awaitReady(t, client)
 	_, err := client.Unsubscribe(t.Context(), filteredSub())
 
 	var relayErr *protocol.Error
@@ -1687,6 +1691,8 @@ func TestFilteredReplayRefusalPreservesMirror(t *testing.T) {
 	t.Parallel()
 	relay := newFakeRelay(t)
 	client, stop := relay.start(t, quiet())
+	awaitConnected(t, client)
+
 	sub := filteredSub()
 
 	_, err := client.Subscribe(t.Context(), sub)
@@ -1748,6 +1754,8 @@ func TestReconnectSubscribeEchoKeepsCompleteMirror(t *testing.T) {
 	t.Parallel()
 	relay := newFakeRelay(t)
 	client, stop := relay.start(t, quiet())
+	awaitConnected(t, client)
+
 	first := filteredSub()
 	second := first
 	second.Name = "other"
@@ -1899,6 +1907,8 @@ func TestIncompatibleSubscribeStopsRun(t *testing.T) {
 	finished := make(chan error, 1)
 	go func() { finished <- client.Run(ctx) }()
 
+	awaitConnected(t, client)
+
 	_, err := client.Subscribe(t.Context(), filteredSub())
 	if !errors.Is(err, ErrRelayTooOld) {
 		t.Fatalf("subscribe = %v", err)
@@ -1926,6 +1936,8 @@ func TestRejectedFilteredReplayStopsRun(t *testing.T) {
 
 	finished := make(chan error, 1)
 	go func() { finished <- client.Run(ctx) }()
+
+	awaitConnected(t, client)
 
 	sub := filteredSub()
 	mustSubscribe(t, client, sub)
