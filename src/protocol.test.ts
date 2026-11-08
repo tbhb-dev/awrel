@@ -395,3 +395,384 @@ describe("unsubscribe", () => {
     ).toStrictEqual([]);
   });
 });
+
+describe("subscription filters", () => {
+  const base = { ...GITHUB, event: "workflow_run" };
+  for (const field of ["action", "conclusion"] as const) {
+    const message = `${field} must be a list of 1 to 8 strings matching ^[a-z0-9_.-]{1,64}$`;
+    it.each(
+      [
+        ["a"],
+        ["z"],
+        ["0"],
+        ["9"],
+        ["_"],
+        ["."],
+        ["-"],
+        ["a".repeat(64)],
+        ["future_value.2-0"],
+        Array.from({ length: 8 }, (_, i) => String(i)),
+        Array<string>(8).fill("completed"),
+      ].map((values) => ({ values })),
+    )(`accepts ${field} $values`, ({ values }) => {
+      expect(subscribe({ ...base, [field]: values })).toStrictEqual(
+        accepted({ ...base, [field]: [...new Set(values)].sort() }),
+      );
+    });
+    it.each(
+      [
+        null,
+        false,
+        1,
+        "completed",
+        {},
+        [],
+        [null],
+        [1],
+        [false],
+        [["completed"]],
+        [""],
+        ["a".repeat(65)],
+        ["A"],
+        ["/"],
+        [" "],
+        [":"],
+        ["`"],
+        ["{"],
+        ["é"],
+        ["!a"],
+        ["a!"],
+        ["a\n"],
+        ["a", "invalid!"],
+        Array<string>(9).fill("completed"),
+      ].map((input) => ({ input })),
+    )(`rejects invalid ${field} $input`, ({ input }) => {
+      expect(subscribe({ ...base, [field]: input })).toStrictEqual(
+        bad(message),
+      );
+    });
+  }
+
+  for (const field of ["name", "workflow_path"] as const) {
+    const values =
+      field === "name"
+        ? [" ", "~", "!", '"', "\\", "*", "?", " / test ", "x".repeat(128)]
+        : ["A", "Z", "a", "z", "0", "9", "_", ".", "/", "-", "x".repeat(256)];
+    it.each(values)(`preserves exact ${field} %j`, (input) => {
+      expect(subscribe({ ...base, [field]: input })).toStrictEqual(
+        accepted({ ...base, [field]: input }),
+      );
+    });
+    const invalid =
+      field === "name"
+        ? ["x".repeat(129), "\x1f", "\x7f", "é", "a\n", "\ta"]
+        : [
+            "x".repeat(257),
+            " ",
+            "\\",
+            ":",
+            "@",
+            "[",
+            "`",
+            "{",
+            "é",
+            "!a",
+            "a!",
+            "a\n",
+          ];
+    it.each(
+      [null, 1, false, [], ["valid"], {}, "", ...invalid].map((input) => ({
+        input,
+      })),
+    )(`rejects invalid ${field} $input`, ({ input }) => {
+      const pattern =
+        field === "name"
+          ? "^[\\x20-\\x7e]{1,128}$"
+          : "^[A-Za-z0-9_./-]{1,256}$";
+      expect(subscribe({ ...base, [field]: input })).toStrictEqual(
+        bad(`${field} must match ${pattern}`),
+      );
+    });
+  }
+});
+
+describe("filter event support", () => {
+  const base = { ...GITHUB, event: "workflow_run" };
+  const valid = {
+    action: ["completed"],
+    conclusion: ["failure"],
+    name: " CI / test ",
+    workflow_path: ".github/workflows/ci.yml",
+  };
+  const actionEvents = [
+    "branch_protection_configuration",
+    "branch_protection_rule",
+    "check_run",
+    "check_suite",
+    "code_scanning_alert",
+    "commit_comment",
+    "custom_property",
+    "custom_property_values",
+    "dependabot_alert",
+    "deploy_key",
+    "deployment",
+    "deployment_protection_rule",
+    "deployment_review",
+    "deployment_status",
+    "discussion",
+    "discussion_comment",
+    "github_app_authorization",
+    "installation",
+    "installation_repositories",
+    "installation_target",
+    "issue_comment",
+    "issue_dependencies",
+    "issue_relates_to",
+    "issues",
+    "label",
+    "marketplace_purchase",
+    "member",
+    "membership",
+    "merge_group",
+    "meta",
+    "milestone",
+    "org_block",
+    "organization",
+    "package",
+    "personal_access_token_request",
+    "project",
+    "project_card",
+    "project_column",
+    "projects_v2",
+    "projects_v2_item",
+    "projects_v2_status_update",
+    "pull_request",
+    "pull_request_review",
+    "pull_request_review_comment",
+    "pull_request_review_thread",
+    "registry_package",
+    "release",
+    "repository",
+    "repository_advisory",
+    "repository_dispatch",
+    "repository_ruleset",
+    "repository_vulnerability_alert",
+    "secret_scanning_alert",
+    "secret_scanning_alert_location",
+    "secret_scanning_scan",
+    "security_advisory",
+    "sponsorship",
+    "star",
+    "sub_issues",
+    "team",
+    "watch",
+    "workflow_job",
+    "workflow_run",
+  ];
+  it.each(actionEvents)("supports action on %s", (event) => {
+    const subscription = { ...base, event, action: ["future_action"] };
+    expect(subscribe(subscription)).toStrictEqual(accepted(subscription));
+  });
+  it.each([
+    "push",
+    "create",
+    "delete",
+    "fork",
+    "gollum",
+    "page_build",
+    "ping",
+    "public",
+    "repository_import",
+    "security_and_analysis",
+    "status",
+    "team_add",
+    "workflow_dispatch",
+    "unknown",
+  ])("rejects action on %s", (event) => {
+    expect(subscribe({ ...base, event, action: ["created"] })).toStrictEqual(
+      bad(`action is not supported for github event ${event}`),
+    );
+    expect(subscribe({ ...base, event })).toStrictEqual(
+      accepted({ ...base, event }),
+    );
+  });
+  for (const [field, input] of Object.entries(valid)) {
+    it(`rejects ${field} on another provider`, () => {
+      expect(
+        subscribe({ ...base, provider: "gitlab", [field]: input }),
+      ).toStrictEqual(bad(`${field} is supported only for github`));
+    });
+    it.each([
+      { provider: "github" },
+      { provider: "github", event: "workflow_run" },
+      { provider: "github", repository: "o/r" },
+    ])(
+      `requires a complete pair for ${field} on subscribe and unsubscribe: %j`,
+      (incomplete) => {
+        for (const type of ["subscribe", "unsubscribe"]) {
+          expect(
+            handle([], frame(type, { ...incomplete, [field]: input })),
+          ).toStrictEqual(
+            bad("filtered subscriptions require event and repository"),
+          );
+        }
+      },
+    );
+    for (const event of [
+      "push",
+      "check_run",
+      "check_suite",
+      "workflow_run",
+      "workflow_job",
+    ]) {
+      const support = {
+        action: ["check_run", "check_suite", "workflow_run", "workflow_job"],
+        conclusion: [
+          "check_run",
+          "check_suite",
+          "workflow_run",
+          "workflow_job",
+        ],
+        name: ["check_run", "workflow_run", "workflow_job"],
+        workflow_path: ["workflow_run"],
+      };
+      const supported = support[field as keyof typeof support].includes(event);
+      it(`${supported ? "accepts" : "rejects"} ${field} on ${event}`, () => {
+        const subscription = { ...base, event, [field]: input };
+        expect(subscribe(subscription)).toStrictEqual(
+          supported
+            ? accepted(subscription)
+            : bad(`${field} is not supported for github event ${event}`),
+        );
+      });
+    }
+  }
+});
+
+describe("filter identity and replies", () => {
+  const base = { ...GITHUB, event: "workflow_run" };
+  const valid = {
+    action: ["completed"],
+    conclusion: ["failure"],
+    name: " CI / test ",
+    workflow_path: ".github/workflows/ci.yml",
+  };
+  it("canonicalizes every list, preserves strings and ignores unknown keys", () => {
+    const input = {
+      ...base,
+      repository: "O/R",
+      ...valid,
+      action: ["requested", "completed", "completed"],
+      conclusion: ["success", "failure", "success"],
+      extra: 1,
+    };
+    const canonical = {
+      ...base,
+      ...valid,
+      action: ["completed", "requested"],
+      conclusion: ["failure", "success"],
+    };
+    expect(subscribe(input)).toStrictEqual(accepted(canonical));
+    expect(handle([canonical], frame("subscribe", input))).toStrictEqual({
+      ...listed("i", [canonical]),
+      next: null,
+    });
+    expect(handle([canonical], frame("unsubscribe", input))).toStrictEqual({
+      ...listed("i", []),
+      next: [],
+    });
+  });
+
+  for (const [field, input] of Object.entries(valid)) {
+    it(`includes ${field} in identity and exact removal`, () => {
+      const filtered = { ...base, [field]: input };
+      const different = {
+        ...base,
+        [field]: Array.isArray(input) ? ["other"] : "other",
+      };
+      const current = [base, filtered, different];
+      expect(handle([base], frame("subscribe", filtered)).next).toStrictEqual([
+        base,
+        filtered,
+      ]);
+      expect(handle([filtered], frame("subscribe", base)).next).toStrictEqual([
+        filtered,
+        base,
+      ]);
+      expect(
+        handle([filtered], frame("subscribe", different)).next,
+      ).toStrictEqual([filtered, different]);
+      expect(
+        handle(current, frame("unsubscribe", filtered)).next,
+      ).toStrictEqual([base, different]);
+      expect(handle(current, frame("unsubscribe", base)).next).toStrictEqual([
+        filtered,
+        different,
+      ]);
+      expect(handle([filtered], frame("unsubscribe", base))).toStrictEqual(
+        error("i", "not_subscribed", "no such subscription"),
+      );
+      expect(handle([base], frame("unsubscribe", filtered))).toStrictEqual(
+        error("i", "not_subscribed", "no such subscription"),
+      );
+    });
+  }
+
+  it.each(["list", "subscribe", "unsubscribe"])(
+    "echoes capability only for literal true on %s",
+    (type) => {
+      const subscription = { ...base, ...valid };
+      for (const flag of [true, false, null, "true", 1, undefined]) {
+        const current = type === "subscribe" ? [] : [subscription];
+        const outcome = handle(
+          current,
+          JSON.stringify({
+            type,
+            id: "i",
+            subscription,
+            subscription_filters: flag,
+          }),
+        );
+        const entries = type === "unsubscribe" ? [] : [subscription];
+        expect(outcome.reply).toStrictEqual({
+          ...listed("i", entries).reply,
+          ...(flag === true ? { subscription_filters: true } : {}),
+        });
+      }
+    },
+  );
+
+  it("counts canonical filters and JSON escapes at the attachment boundary", () => {
+    const full: Subscription[] = Array.from({ length: 96 }, (_, i) => ({
+      ...base,
+      action: ["completed"],
+      repository: `o/${String(i).padStart(40, "r")}`,
+    }));
+    const gap = 12288 - utf8Bytes(JSON.stringify({ subscriptions: full }));
+    const finalBase = { ...base, ...valid, name: "" };
+    const length = gap - utf8Bytes(JSON.stringify(finalBase)) - 1;
+    expect(length).toBeGreaterThan(0);
+    expect(length).toBeLessThanOrEqual(128);
+    const final = { ...finalBase, name: '"'.repeat(length / 2) };
+    const next = [...full, final];
+    expect(utf8Bytes(JSON.stringify({ subscriptions: next }))).toBe(12288);
+    expect(handle(full, frame("subscribe", final)).next).toStrictEqual(next);
+    expect(
+      handle(
+        full,
+        JSON.stringify({
+          type: "subscribe",
+          id: "i",
+          subscription_filters: true,
+          subscription: { ...final, action: ["completed", "completed"] },
+        }),
+      ),
+    ).toStrictEqual({
+      reply: { ...listed("i", next).reply, subscription_filters: true },
+      next,
+    });
+    expect(
+      handle(full, frame("subscribe", { ...final, name: `${final.name}x` })),
+    ).toStrictEqual({ reply: limit("i"), next: null });
+  });
+});

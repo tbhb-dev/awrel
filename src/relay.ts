@@ -21,12 +21,41 @@ export interface Attachment {
   readonly subscriptions: readonly Subscription[];
 }
 
-function matches(subscription: Subscription, event: RelayEvent): boolean {
+// Read only fixed fields on the event's own object, once per publication.
+function property(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)[key]
+    : undefined;
+}
+
+function filterFields(event: RelayEvent) {
+  const object = property(event.payload, event.event);
+  return {
+    action: property(event.payload, "action"),
+    conclusion: property(object, "conclusion"),
+    name: property(object, "name"),
+    workflow_path: property(object, "path"),
+  };
+}
+
+function matches(
+  subscription: Subscription,
+  event: RelayEvent,
+  fields: ReturnType<typeof filterFields>,
+): boolean {
   return (
     subscription.provider === event.provider &&
     (subscription.event === undefined || subscription.event === event.event) &&
     (subscription.repository === undefined ||
-      subscription.repository.toLowerCase() === event.repository?.toLowerCase())
+      subscription.repository.toLowerCase() ===
+        event.repository?.toLowerCase()) &&
+    (subscription.action === undefined ||
+      subscription.action.some((value) => value === fields.action)) &&
+    (subscription.conclusion === undefined ||
+      subscription.conclusion.some((value) => value === fields.conclusion)) &&
+    (subscription.name === undefined || subscription.name === fields.name) &&
+    (subscription.workflow_path === undefined ||
+      subscription.workflow_path === fields.workflow_path)
   );
 }
 
@@ -83,10 +112,14 @@ export class Relay extends DurableObject {
    */
   publish(event: RelayEvent): number {
     const message = JSON.stringify({ type: "event", ...event });
+    const fields = filterFields(event);
     let reached = 0;
     for (const socket of this.ctx.getWebSockets()) {
       const attachment = socket.deserializeAttachment() as Attachment | null;
-      if (attachment?.subscriptions.some((s) => matches(s, event)) === true) {
+      if (
+        attachment?.subscriptions.some((s) => matches(s, event, fields)) ===
+        true
+      ) {
         // One socket that fails mid-close mustn't stop the others from
         // receiving the event, or fail the webhook.
         try {
