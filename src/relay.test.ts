@@ -272,10 +272,10 @@ it("answers a binary frame with an error and stays open", async () => {
 
 it("refuses a change past the budget and keeps the list", async () => {
   const client = await dial();
-  const names = Array.from({ length: 11 }, (_, i) => ({
+  const names = Array.from({ length: 100 }, (_, i) => ({
     provider: "github",
     event: "push",
-    repository: `o/${String(i).padStart(100, "r")}`,
+    repository: `o/${String(i).padStart(67, "r")}`,
   }));
   for (const [i, name] of names.entries()) {
     await exchange(client, subscribe(`s${String(i)}`, name));
@@ -283,9 +283,11 @@ it("refuses a change past the budget and keeps the list", async () => {
   const last = {
     provider: "github",
     event: "push",
-    repository: `o/${"r".repeat(13)}`,
+    repository: `o/${"r".repeat(14)}`,
   };
-  await exchange(client, subscribe("last", last));
+  expect(await exchange(client, subscribe("last", last))).toStrictEqual(
+    subscriptions("last", [...names, last]),
+  );
   expect(
     await exchange(
       client,
