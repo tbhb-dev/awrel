@@ -1531,6 +1531,7 @@ func TestLocalAttachmentBoundary(t *testing.T) {
 
 	relay := newFakeRelay(t)
 	client, _ := relay.start(t, quiet())
+	awaitConnected(t, client)
 	// Seed the mirror with a valid attachment to isolate the local budget estimate.
 	client.replaceMirror(base)
 
