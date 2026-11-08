@@ -51,6 +51,21 @@ func quiet() Options {
 	}
 }
 
+//nolint:paralleltest // fail broken round trips before parallel request tests can block
+func TestInitialList(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), waitLimit)
+	defer cancel()
+
+	relay := newFakeRelay(t)
+	client, _ := relay.start(t, quiet())
+	awaitReady(t, client)
+
+	_, err := client.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNewDefaults(t *testing.T) {
 	t.Parallel()
 
