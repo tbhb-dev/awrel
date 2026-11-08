@@ -309,6 +309,20 @@ func (f *fakeRelay) connCount() int {
 	return f.conns
 }
 
+// awaitReady connects without sending a request, preserving frame counts and
+// request IDs in tests that assert them. acquire returns only after replay.
+func awaitReady(t *testing.T, client *Client) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), connectLimit)
+	defer cancel()
+
+	_, err := client.acquire(ctx)
+	if err != nil {
+		t.Fatalf("connecting to the fake relay: %v", err)
+	}
+}
+
 // dialFirst returns a Dial that connects to the fake n times and then waits
 // for its context to end.
 func (f *fakeRelay) dialFirst(limit int32) func(context.Context) (*transport.Conn, error) {
