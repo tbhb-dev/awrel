@@ -33,9 +33,9 @@ func TestEncode(t *testing.T) {
 			EncodeSubscribe("1", full),
 		},
 		{
-			"subscribe omits empty event and repository",
-			`{"subscription":{"provider":"github"},"type":"subscribe","id":"2"}`,
-			EncodeSubscribe("2", bare),
+			"unsubscribe omits empty event and repository",
+			`{"subscription":{"provider":"github"},"type":"unsubscribe","id":"2"}`,
+			EncodeUnsubscribe("2", bare),
 		},
 		{
 			"unsubscribe",

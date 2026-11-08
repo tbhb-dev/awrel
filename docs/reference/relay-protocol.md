@@ -7,7 +7,7 @@ generated:
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-07T22:35:18Z"
+    at: "2026-11-08T00:11:32Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -27,6 +27,8 @@ Every message is one JSON text frame. A client message is at most 4096 bytes, an
 ## Subscriptions
 
 A subscription is `{"provider": string, "event"?: string, "repository"?: string}`. `provider` matches `^[a-z0-9-]{1,32}$`. `event` matches `^[a-z0-9_.-]{1,64}$`. `repository` is `owner/name`, with 1 to 39 characters in the owner and 1 to 100 in the name, all from `[A-Za-z0-9_.-]`. The server stores `repository` in lowercase and compares event repositories without case. Subscriptions with equal fields, repository case aside, count as the same subscription. A socket's subscriptions live in its attachment and end with the socket.
+
+For `github`, `subscribe` requires both `event` and `repository`. A complete subscription is `{"provider":"github","event":"check_suite","repository":"owner/name"}`. Subscribe once per event type and repository. `unsubscribe` accepts any subscription that passes the field rules, even if `event` or `repository` is absent. The relay doesn't check stored subscriptions again on a live socket. They keep matching until the socket closes. Other providers follow the preceding field rules.
 
 ## Client to server
 
@@ -48,7 +50,7 @@ Clients choose each `id`, a string of 1 to 64 characters, and the reply echoes i
 | `{"type":"pong"}` | Reply to ping, exactly these 15 bytes. |
 | `{"type":"event","provider":string,"event":string,"delivery":string,"repository":string or null,"payload":any}` | A webhook event that matched at least one subscription. A socket gets it once, whatever the number of matches. |
 
-Error codes are `bad_message` (not JSON, unknown `type`, missing or ill-typed field), `bad_subscription` (a field fails the patterns in the Subscriptions section), `not_subscribed`, and `limit` (the change would push the attachment past its budget). An error leaves the subscriptions unchanged.
+Error codes are `bad_message` (not JSON, unknown `type`, missing or ill-typed field), `bad_subscription` (a field fails the patterns in the Subscriptions section, or a `github` subscribe lacks `event` or `repository`), `not_subscribed`, and `limit` (the change would push the attachment past its budget). An error leaves the subscriptions unchanged.
 
 A ping frame must be exactly the 15 bytes `{"type":"ping"}` to get the automatic response. Any other frame that resembles a ping, such as one with spaces or extra fields, goes to the Durable Object as a normal message and gets `bad_message`. Ping never wakes the Durable Object, because `setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}'))` answers it. The Durable Object rejects a change whose `JSON.stringify` of the attachment would exceed 1792 bytes, well under the 16,384-byte `serializeAttachment` limit, and treats a throw from `serializeAttachment` as `limit`.
 

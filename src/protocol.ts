@@ -2,9 +2,9 @@
 // Copyright Tony Burns
 
 /**
- * What a connection asked to receive: one provider's events, optionally only
- * one event name, optionally only one repository (compared without case, as
- * GitHub compares names).
+ * What a connection asked to receive. New GitHub subscriptions require an
+ * event name and repository; older stored subscriptions can omit either.
+ * Repositories are compared without case, as GitHub compares names.
  */
 export interface Subscription {
   readonly provider: string;
@@ -181,6 +181,18 @@ export function handle(
     next,
   });
   if (type === "subscribe") {
+    if (subscription.provider === "github") {
+      const missing = (["event", "repository"] as const).filter(
+        (field) => subscription[field] === undefined,
+      );
+      if (missing.length !== 0) {
+        return fail(
+          id,
+          "bad_subscription",
+          `github subscription is missing ${missing.join(" and ")}; subscribe once per event type and repository`,
+        );
+      }
+    }
     if (current.some((s) => same(s, subscription))) {
       return unchanged();
     }

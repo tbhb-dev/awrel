@@ -14,7 +14,7 @@ Or skip the install and run a pinned release from the MCP configuration, with `g
 
 ## Running the server
 
-The `awrel mcp` command speaks MCP over stdio, and it holds the connection to the relay. Matching events go to the agent. The agent manages its subscriptions with `subscribe`, `unsubscribe` and `list_subscriptions`. `awrel mcp` needs a relay to connect to, and the endpoint has no default. [Self-host one](docs/how-to/self-host.md) first. Add the server to the MCP configuration of the agent:
+The `awrel mcp` command speaks MCP over stdio, and it holds the connection to the relay. Matching events go to the agent. The agent manages its subscriptions with `subscribe`, `unsubscribe` and `list_subscriptions`. For GitHub, each subscribe needs an event name and a repository, such as `{"provider":"github","event":"check_suite","repository":"owner/name"}`. `awrel mcp` needs a relay to connect to, and the endpoint has no default. [Self-host one](docs/how-to/self-host.md) first. Add the server to the MCP configuration of the agent:
 
 ```json
 {

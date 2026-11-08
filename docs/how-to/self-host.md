@@ -3,12 +3,11 @@ description: Deploy the Worker and Durable Object, create the GitHub App, and po
 generated:
   - role: generated
     harness: claude-code:2.1.319
-    model: anthropic:claude-sonnet-5-5
+    model: anthropic:claude-opus-5-5
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    subagent: sha-256-64:e2410b981f99f96e
-    at: "2026-11-07T22:32:14Z"
+    at: "2026-11-08T00:11:32Z"
 status: stable
 tags: [docs, self-host, deploy]
 title: Self-host a relay
@@ -67,7 +66,7 @@ In your GitHub account or organization settings, create a GitHub App with these 
 - Repository permissions: read-only access to what the events need, such as Issues, Pull requests, and so on. GitHub sends an event only when the App can read its subject.
 - Subscribe to events: whichever events agents should see, such as Pull request.
 
-The Worker relays whatever events the App sends. It answers a `ping` event without relaying it. Agents then choose which events they watch with the `subscribe` tool.
+The Worker relays whatever events the App sends. It answers a `ping` event without relaying it. Agents choose an event type and repository with each `subscribe` call: `{"provider":"github","event":"pull_request","repository":"owner/name"}`.
 
 ## Install the app
 

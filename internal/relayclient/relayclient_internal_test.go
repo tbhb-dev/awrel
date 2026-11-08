@@ -19,14 +19,17 @@ import (
 	"go.tbhb.dev/awrel/internal/transport"
 )
 
-const providerGitHub = "github"
+const (
+	providerGitHub = "github"
+	pushEvent      = "push"
+)
 
 func subA() protocol.Subscription {
-	return protocol.Subscription{Provider: providerGitHub, Event: "push", Repository: "o/a"}
+	return protocol.Subscription{Provider: providerGitHub, Event: pushEvent, Repository: "o/a"}
 }
 
 func subB() protocol.Subscription {
-	return protocol.Subscription{Provider: providerGitHub, Event: "", Repository: "o/b"}
+	return protocol.Subscription{Provider: providerGitHub, Event: pushEvent, Repository: "o/b"}
 }
 
 // quiet returns Options with short intervals and zero jitter. It discards
@@ -357,7 +360,7 @@ func awaitConnected(t *testing.T, client *Client) {
 
 // refusedSub is the subscription the fake relay refuses with a limit error.
 func refusedSub() protocol.Subscription {
-	return protocol.Subscription{Provider: providerGitHub, Event: "", Repository: "o/full"}
+	return protocol.Subscription{Provider: providerGitHub, Event: pushEvent, Repository: "o/full"}
 }
 
 func TestSubscribeUnsubscribeList(t *testing.T) {
@@ -412,7 +415,7 @@ func TestRelayErrorReplies(t *testing.T) {
 
 	_, err = client.Subscribe(
 		t.Context(),
-		protocol.Subscription{Provider: providerGitHub, Event: "", Repository: "o/full"},
+		protocol.Subscription{Provider: providerGitHub, Event: pushEvent, Repository: "o/full"},
 	)
 	if got := err.Error(); got != "limit: full" {
 		t.Errorf("err = %q, want %q", got, "limit: full")

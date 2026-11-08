@@ -28,6 +28,9 @@ const (
 	githubName      = "github"
 	ownerRepo       = "o/r"
 	providerKey     = "provider"
+	eventKey        = "event"
+	repositoryKey   = "repository"
+	pushEvent       = "push"
 	subscribeTool   = "subscribe"
 	unsubscribeTool = "unsubscribe"
 	listTool        = "list_subscriptions"
@@ -340,8 +343,9 @@ func TestCompactOptionSetsTheDelivery(t *testing.T) {
 // wantInstructions is a copy of Instructions written out apart from the code,
 // so that a change to the text shows up as a test failure.
 const wantInstructions = "awrel relays webhook events into this session. Today the only provider is GitHub. Call " +
-	"`subscribe` with provider \"github\", and optionally an event name (the X-GitHub-Event value, " +
-	"such as \"pull_request\") and a repository \"owner/name\". Matching events arrive as " +
+	"`subscribe` with provider \"github\", an event name (the X-GitHub-Event value, " +
+	"such as \"pull_request\") and a repository \"owner/name\". " +
+	"Subscribe once per event and repository pair; anything less is refused. Matching events arrive as " +
 	"`<channel source=\"awrel\" ...>` tags with attributes provider, event, action, repository, " +
 	"delivery and compact, with the webhook's JSON payload as the body. A payload over 64 KiB is " +
 	"replaced by a short note, and the attribute truncated is \"true\". When the attribute compact is " +
@@ -444,11 +448,17 @@ func TestToolList(t *testing.T) {
 		t.Fatalf("tools = %v", schemas)
 	}
 
-	for _, name := range []string{subscribeTool, unsubscribeTool} {
-		schema := schemas[name]
-		for _, want := range []string{`"required":["provider"]`, `"additionalProperties":false`, `"repository"`, `"event"`} {
+	for _, test := range []struct {
+		name     string
+		required string
+	}{
+		{subscribeTool, `"required":["provider","event","repository"]`},
+		{unsubscribeTool, `"required":["provider"]`},
+	} {
+		schema := schemas[test.name]
+		for _, want := range []string{test.required, `"additionalProperties":false`, `"repository"`, `"event"`} {
 			if !strings.Contains(schema, want) {
-				t.Errorf("%s schema %s lacks %s", name, schema, want)
+				t.Errorf("%s schema %s lacks %s", test.name, schema, want)
 			}
 		}
 	}
@@ -492,7 +502,7 @@ func textOf(t *testing.T, result *mcp.CallToolResult) string {
 func TestToolsSucceed(t *testing.T) {
 	t.Parallel()
 
-	subs := []protocol.Subscription{{Provider: githubName, Event: "push", Repository: ownerRepo}}
+	subs := []protocol.Subscription{{Provider: githubName, Event: pushEvent, Repository: ownerRepo}}
 	// The SDK renders the structured content with its keys sorted.
 	want := `{"subscriptions":[{"event":"push","provider":"github","repository":"o/r"}]}`
 
@@ -502,7 +512,7 @@ func TestToolsSucceed(t *testing.T) {
 		wantCall string
 	}{
 		{
-			args:     map[string]any{providerKey: githubName, "event": "push", "repository": ownerRepo},
+			args:     map[string]any{providerKey: githubName, eventKey: pushEvent, repositoryKey: ownerRepo},
 			name:     subscribeTool,
 			wantCall: "subscribe github/push/o/r",
 		},
@@ -559,7 +569,7 @@ func TestToolsReportRelayErrors(t *testing.T) {
 	}
 	wants := []string{"limit: too many", "not connected to the relay: dial refused"}
 	tools := map[string]map[string]any{
-		subscribeTool:   {providerKey: githubName},
+		subscribeTool:   {providerKey: githubName, eventKey: pushEvent, repositoryKey: ownerRepo},
 		unsubscribeTool: {providerKey: githubName},
 		listTool:        {},
 	}
@@ -583,13 +593,52 @@ func TestToolsReportRelayErrors(t *testing.T) {
 
 var errNotConnected = errors.New("not connected to the relay: dial refused")
 
+func TestSubscribeNeedsEventAndRepository(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args SubscriptionArgs
+	}{
+		{"provider only", SubscriptionArgs{Provider: githubName, Event: "", Repository: ""}},
+		{"event only", SubscriptionArgs{Provider: githubName, Event: pushEvent, Repository: ""}},
+		{"repository only", SubscriptionArgs{Provider: githubName, Event: "", Repository: ownerRepo}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			relay := newRelay()
+			rig := start(t, claudeCode, relay)
+
+			_, _, err := rig.server.subscribe(t.Context(), nil, test.args)
+			if !errors.Is(err, errIncompleteSubscription) {
+				t.Fatalf("subscribe = %v, want errIncompleteSubscription", err)
+			}
+
+			const want = "a github subscription needs an event type and a repository: " +
+				"one without either matches far more than you need and can flood this session; " +
+				"subscribe once per event type and repository, such as event \"check_suite\" with repository \"owner/name\""
+			if err.Error() != want {
+				t.Errorf("subscribe error = %q, want %q", err, want)
+			}
+
+			if got := relay.seen(); len(got) != 0 {
+				t.Errorf("the relay was called: %v", got)
+			}
+		})
+	}
+}
+
 func TestSubscribeNeedsEventDelivery(t *testing.T) {
 	t.Parallel()
 
 	relay := newRelay()
 	rig := start(t, otherName, relay)
 
-	result := callTool(t, rig, subscribeTool, map[string]any{providerKey: githubName})
+	result := callTool(t, rig, subscribeTool, map[string]any{
+		providerKey: githubName, eventKey: pushEvent, repositoryKey: ownerRepo,
+	})
 
 	if !result.IsError || textOf(t, result) != "this MCP client (other) has no awrel event delivery" {
 		t.Errorf("result = %+v (%q)", result, textOf(t, result))
@@ -754,7 +803,8 @@ func TestServeOverPipes(t *testing.T) {
 
 	session.send(
 		t,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"subscribe","arguments":{"provider":"github"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call",`+
+			`"params":{"name":"subscribe","arguments":{"provider":"github","event":"push","repository":"o/r"}}}`,
 	)
 
 	if reply := session.receive(t); !strings.Contains(reply, "this MCP client () has no awrel event delivery") {

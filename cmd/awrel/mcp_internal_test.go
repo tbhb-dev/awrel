@@ -43,7 +43,7 @@ const (
 		`"capabilities":{},"clientInfo":{"name":"claude-code","version":"1"}}}` + "\n" +
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n"
 	subscribeCall = `{"jsonrpc":"2.0","id":2,"method":"tools/call",` +
-		`"params":{"name":"subscribe","arguments":{"provider":"github"}}}` + "\n"
+		`"params":{"name":"subscribe","arguments":{"provider":"github","event":"issue_comment","repository":"o/r"}}}` + "\n"
 	toolCalls = subscribeCall +
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call",` +
 		`"params":{"name":"unsubscribe","arguments":{"provider":"github"}}}` + "\n" +
@@ -581,7 +581,8 @@ func fakeRelay(t *testing.T) string {
 			return
 		}
 
-		reply := `{"type":"subscriptions","id":"` + msg.ID + `","subscriptions":[{"provider":"github"}]}`
+		reply := `{"type":"subscriptions","id":"` + msg.ID +
+			`","subscriptions":[{"provider":"github","event":"issue_comment","repository":"o/r"}]}`
 		event := `{"type":"event","provider":"github","event":"issue_comment","delivery":"d1",` +
 			`"repository":"o/r","payload":{"action":"created"}}`
 
