@@ -689,6 +689,57 @@ func TestResubscribeTimeoutReconnects(t *testing.T) {
 	}
 }
 
+func TestInterruptedReplayPreservesMirror(t *testing.T) {
+	t.Parallel()
+
+	relay := newFakeRelay(t)
+	client, _ := relay.start(t, quiet())
+	want := []protocol.Subscription{
+		subA(),
+		subB(),
+		{Provider: providerGitHub, Event: pushEvent, Repository: "o/c"},
+	}
+	mustSubscribe(t, client, want...)
+
+	resubscribes := 0
+
+	relay.setIntercept(func(conn int, req frame) (string, bool) {
+		if conn != 2 || req.Type != typeSubscribe {
+			return "", false
+		}
+
+		resubscribes++
+		if resubscribes == 2 {
+			// The first partial reply has been processed before this request.
+			// Lose the connection before the second reply can extend the list.
+			relay.drop()
+
+			return "", true
+		}
+
+		return "", false
+	})
+	relay.drop()
+	eventually(t, "a third connection", func() bool { return relay.connCount() >= 3 })
+
+	list, err := client.List(t.Context())
+	if err != nil || !sameSubscriptions(list, want...) {
+		t.Errorf("List = %v, %v, want %v, nil", list, err, want)
+	}
+
+	var replayed []protocol.Subscription
+
+	for _, req := range relay.onConn(3) {
+		if req.Type == typeSubscribe && req.Subscription != nil {
+			replayed = append(replayed, *req.Subscription)
+		}
+	}
+
+	if !sameSubscriptions(replayed, want...) {
+		t.Errorf("third connection subscribes = %v, want %v", replayed, want)
+	}
+}
+
 func TestKeepalivePings(t *testing.T) {
 	t.Parallel()
 
@@ -1483,6 +1534,7 @@ func TestLocalAttachmentBoundary(t *testing.T) {
 
 	relay := newFakeRelay(t)
 	client, _ := relay.start(t, quiet())
+	awaitConnected(t, client)
 	// Seed the mirror with a valid attachment to isolate the local budget estimate.
 	client.replaceMirror(base)
 
