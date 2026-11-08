@@ -30,12 +30,18 @@ const (
 	defaultPongTimeout    = 10 * time.Second
 	defaultRequestTimeout = 10 * time.Second
 	// backoffFactor is the growth of the retry delay per attempt.
-	backoffFactor = 2
+	backoffFactor    = 2
+	requestList      = "list"
+	requestSubscribe = "subscribe"
+	maxMessageBytes  = 4096
 )
 
 var (
-	// ErrClosed is the cause of a request that was waiting when the connection
-	// ended.
+	// ErrRelayTooOld refuses a connection that can't honor requested filters.
+	ErrRelayTooOld = errors.New(
+		"relay too old: subscription filter capability or canonical subscription echo missing or changed",
+	)
+	// ErrClosed is the cause of a request waiting when the connection ended.
 	ErrClosed = errors.New("connection to the relay closed")
 	// ErrNoAnswer is the cause of a request that the relay didn't answer in time.
 	ErrNoAnswer = errors.New("relay did not answer")
@@ -86,8 +92,11 @@ type Options struct {
 // session is one live connection.
 type session struct {
 	conn *transport.Conn
-	// done is closed when the reader goroutine has exited.
+	// done closes when the reader exits.
 	done chan struct{}
+	// operations serializes subscription changes and their budget estimates.
+	operations sync.Mutex //exhaustruct:optional
+	capable    bool       //exhaustruct:optional
 }
 
 // reply is what the reader hands to a waiting request.
@@ -98,18 +107,24 @@ type reply struct {
 
 // Client is a relay session. Create it with New and start it with Run.
 type Client struct {
-	pending map[string]chan reply
-	kick    chan struct{}
-	pong    chan struct{}
-	// ready is closed while cur is set, and replaced when the session ends.
-	ready   chan struct{}
-	cur     *session
-	lastErr error
-	mirror  []protocol.Subscription
-	after   func(time.Duration) <-chan time.Time
-	opts    Options
-	mu      sync.Mutex
-	nextID  atomic.Uint64
+	lastErr  error
+	pong     chan struct{}
+	cur      *session
+	after    func(time.Duration) <-chan time.Time
+	expected map[string]expectation
+	kick     chan struct{}
+	pending  map[string]chan reply
+	ready    chan struct{}
+	mirror   []protocol.Subscription
+	opts     Options
+	nextID   atomic.Uint64
+	mu       sync.Mutex
+	// incompatible stops retries and suppresses all later delivery.
+	incompatible atomic.Bool
+	// replaying freezes the complete mirror while replay replies contain partial lists.
+	replaying atomic.Bool
+	// gated counts filter requests and replay while their echoes are pending.
+	gated atomic.Int32
 }
 
 // New returns a Client. It starts nothing.
@@ -125,17 +140,21 @@ func New(opts Options) *Client {
 	}
 
 	return &Client{
-		opts:    opts,
-		after:   time.After,
-		kick:    newSignal[struct{}](),
-		pong:    newSignal[struct{}](),
-		pending: map[string]chan reply{},
-		ready:   make(chan struct{}),
-		cur:     nil,
-		lastErr: nil,
-		mirror:  nil,
-		mu:      sync.Mutex{},
-		nextID:  atomic.Uint64{},
+		opts:         opts,
+		after:        time.After,
+		kick:         newSignal[struct{}](),
+		pong:         newSignal[struct{}](),
+		pending:      map[string]chan reply{},
+		expected:     map[string]expectation{},
+		ready:        make(chan struct{}),
+		cur:          nil,
+		lastErr:      nil,
+		mirror:       nil,
+		mu:           sync.Mutex{},
+		nextID:       atomic.Uint64{},
+		incompatible: atomic.Bool{},
+		gated:        atomic.Int32{},
+		replaying:    atomic.Bool{},
 	}
 }
 
@@ -185,6 +204,10 @@ func (c *Client) Run(ctx context.Context) error {
 			attempt = 0
 		}
 
+		if c.incompatible.Load() {
+			return nil
+		}
+
 		delay := backoffDelay(c.opts.MinBackoff, c.opts.MaxBackoff, attempt, c.opts.Rand())
 		attempt++
 
@@ -198,17 +221,13 @@ func (c *Client) Run(ctx context.Context) error {
 }
 
 // Subscribe adds sub and returns the relay's list after the change.
-//
-//nolint:dupl // Mirrors Unsubscribe with a different encoder.
 func (c *Client) Subscribe(ctx context.Context, sub protocol.Subscription) ([]protocol.Subscription, error) {
-	return c.call(ctx, func(id string) []byte { return protocol.EncodeSubscribe(id, sub) })
+	return c.subscriptionCall(ctx, requestSubscribe, sub)
 }
 
 // Unsubscribe removes sub and returns the relay's list after the change.
-//
-//nolint:dupl // Mirrors Subscribe with a different encoder.
 func (c *Client) Unsubscribe(ctx context.Context, sub protocol.Subscription) ([]protocol.Subscription, error) {
-	return c.call(ctx, func(id string) []byte { return protocol.EncodeUnsubscribe(id, sub) })
+	return c.subscriptionCall(ctx, "unsubscribe", sub)
 }
 
 // List returns the relay's current list.
@@ -235,6 +254,9 @@ func (c *Client) session(ctx context.Context) bool {
 
 	sess := &session{conn: conn, done: make(chan struct{})}
 
+	c.replaying.Store(true)
+	c.gated.Add(1)
+
 	go func() {
 		defer close(sess.done)
 
@@ -242,6 +264,9 @@ func (c *Client) session(ctx context.Context) bool {
 	}()
 
 	err = c.resubscribe(ctx, sess)
+	c.gated.Add(-1)
+	c.replaying.Store(false)
+
 	if err != nil {
 		c.setLastErr(err)
 		c.opts.Logger.WarnContext(ctx, "resubscribe to the relay", slog.Any("error", err))
@@ -319,17 +344,23 @@ func (c *Client) kickDial() {
 	}
 }
 
-// resubscribe replays the mirror on a new session. A relay error drops that
-// entry from the mirror, and any other error ends the attempt.
+// resubscribe replays the mirror on a new session, dropping unfiltered entries
+// that the relay rejects. Rejected filters preserve the mirror and stop retries.
 func (c *Client) resubscribe(ctx context.Context, sess *session) error {
 	for _, sub := range c.snapshot() {
 		reqCtx, cancel := context.WithTimeout(ctx, c.opts.RequestTimeout)
-		_, err := c.roundTrip(reqCtx, sess, func(id string) []byte { return protocol.EncodeSubscribe(id, sub) })
+		_, err := c.subscriptionTrip(reqCtx, sess, requestSubscribe, sub)
 
 		// gomutants:disable-next-line STATEMENT_REMOVE reason="an uncancelled timer only waits"
 		cancel()
 
 		if relayErr, ok := errors.AsType[*protocol.Error](err); ok {
+			if sub.HasFilters() {
+				c.incompatible.Store(true)
+
+				return ErrRelayTooOld
+			}
+
 			c.opts.Logger.WarnContext(ctx, "relay rejected a resubscribe", slog.Any("error", relayErr))
 			c.dropFromMirror(sub)
 
@@ -349,7 +380,7 @@ func (c *Client) snapshot() []protocol.Subscription {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return slices.Clone(c.mirror)
+	return cloneSubscriptions(c.mirror)
 }
 
 // replaceMirror makes the mirror a copy of subs.
@@ -357,7 +388,7 @@ func (c *Client) replaceMirror(subs []protocol.Subscription) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.mirror = slices.Clone(subs)
+	c.mirror = cloneSubscriptions(subs)
 }
 
 // current returns the live session, if any, and the channel that closes when
@@ -370,11 +401,12 @@ func (c *Client) current() (*session, chan struct{}) {
 }
 
 // register records the channel that waits for the reply to requestID.
-func (c *Client) register(requestID string, waiting chan reply) {
+func (c *Client) register(requestID string, waiting chan reply, expected expectation) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.pending[requestID] = waiting
+	c.expected[requestID] = expected
 }
 
 // forget removes the entry for requestID.
@@ -383,6 +415,7 @@ func (c *Client) forget(requestID string) {
 	defer c.mu.Unlock()
 
 	delete(c.pending, requestID)
+	delete(c.expected, requestID)
 }
 
 // claim removes the entry for requestID and returns its channel.
@@ -401,7 +434,7 @@ func (c *Client) dropFromMirror(sub protocol.Subscription) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.mirror = slices.DeleteFunc(c.mirror, func(other protocol.Subscription) bool { return other == sub })
+	c.mirror = slices.DeleteFunc(c.mirror, func(other protocol.Subscription) bool { return other.Equal(sub) })
 }
 
 // readLoop is the only caller of Conn.Read. It returns when the read fails.
@@ -422,20 +455,21 @@ func (c *Client) readLoop(ctx context.Context, conn *transport.Conn) {
 			continue
 		}
 
-		c.handle(ctx, msg)
+		if !c.handle(ctx, msg) {
+			return
+		}
 	}
 }
 
-func (c *Client) handle(ctx context.Context, msg protocol.Message) {
+func (c *Client) handle(ctx context.Context, msg protocol.Message) bool {
 	switch message := msg.(type) {
 	case protocol.Subscriptions:
-		c.replaceMirror(message.Subscriptions)
-		c.route(ctx, message.ID, reply{subscriptions: message.Subscriptions, err: nil})
+		return c.handleSubscriptions(ctx, message)
 	case protocol.Error:
 		if message.ID == "" {
 			c.opts.Logger.WarnContext(ctx, "relay error without an id", slog.Any("error", message))
 
-			return
+			return true
 		}
 
 		c.route(ctx, message.ID, reply{subscriptions: nil, err: &message})
@@ -445,10 +479,14 @@ func (c *Client) handle(ctx context.Context, msg protocol.Message) {
 		default:
 		}
 	case protocol.Event:
-		c.opts.OnEvent(ctx, message)
+		if c.gated.Load() == 0 && !c.incompatible.Load() {
+			c.opts.OnEvent(ctx, message)
+		}
 	default:
 		c.opts.Logger.DebugContext(ctx, "ignored relay message", slog.Any("message", message))
 	}
+
+	return true
 }
 
 // route hands a reply to the request waiting for requestID.
@@ -517,6 +555,10 @@ func (c *Client) call(ctx context.Context, build func(id string) []byte) ([]prot
 // acquire waits for a live session, asking Run to dial if there is none.
 func (c *Client) acquire(ctx context.Context) (*session, error) {
 	for {
+		if c.incompatible.Load() {
+			return nil, ErrRelayTooOld
+		}
+
 		sess, ready := c.current()
 		if sess != nil {
 			return sess, nil
@@ -550,13 +592,36 @@ func (c *Client) roundTrip(
 	sess *session,
 	build func(id string) []byte,
 ) ([]protocol.Subscription, error) {
+	return c.roundTripWith(
+		ctx,
+		sess,
+		build,
+		expectation{
+			kind:         "",
+			subscription: nil,
+			filters:      false,
+		},
+	)
+}
+
+func (c *Client) roundTripWith(
+	ctx context.Context,
+	sess *session,
+	build func(string) []byte,
+	expected expectation,
+) ([]protocol.Subscription, error) {
 	requestID := strconv.FormatUint(c.nextID.Add(1), 10)
 	results := newSignal[reply]()
 
-	c.register(requestID, results)
+	data := build(requestID)
+	if len(data) > maxMessageBytes {
+		return nil, &protocol.Error{ID: "", Code: "bad_message", Message: "messages must be at most 4096 bytes"}
+	}
+
+	c.register(requestID, results, expected)
 	defer c.forget(requestID)
 
-	err := sess.conn.Write(ctx, build(requestID))
+	err := sess.conn.Write(ctx, data)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // transport.Conn.Write already names the operation
 	}
@@ -565,8 +630,155 @@ func (c *Client) roundTrip(
 	case result := <-results:
 		return result.subscriptions, result.err
 	case <-sess.done:
+		if c.incompatible.Load() {
+			return nil, ErrRelayTooOld
+		}
+
 		return nil, ErrClosed
 	case <-ctx.Done():
 		return nil, fmt.Errorf("%w within %s", ErrNoAnswer, c.opts.RequestTimeout)
 	}
+}
+
+// expectation records the fields needed to check a successful reply.
+type expectation struct {
+	subscription *protocol.Subscription
+	kind         string
+	filters      bool
+}
+
+func (e expectation) accepts(reply protocol.Subscriptions) bool {
+	if !reply.SubscriptionFilters {
+		return false
+	}
+
+	if e.subscription == nil {
+		return true
+	}
+
+	present := slices.ContainsFunc(
+		reply.Subscriptions,
+		func(sub protocol.Subscription) bool { return sub.Equal(*e.subscription) },
+	)
+
+	return present == (e.kind == requestSubscribe)
+}
+
+func cloneSubscriptions(subs []protocol.Subscription) []protocol.Subscription {
+	result := slices.Clone(subs)
+	for i, sub := range result {
+		result[i] = sub.Canonical()
+	}
+
+	return result
+}
+
+func (c *Client) subscriptionCall(
+	ctx context.Context,
+	kind string,
+	sub protocol.Subscription,
+) ([]protocol.Subscription, error) {
+	err := sub.ValidateFilters()
+	if err != nil {
+		return nil, fmt.Errorf("subscription: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, c.opts.RequestTimeout)
+	defer cancel()
+
+	sess, err := c.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.subscriptionTrip(ctx, sess, kind, sub.Canonical())
+}
+
+func (c *Client) subscriptionTrip(
+	ctx context.Context,
+	sess *session,
+	kind string,
+	sub protocol.Subscription,
+) ([]protocol.Subscription, error) {
+	sess.operations.Lock()
+	defer sess.operations.Unlock()
+
+	if c.incompatible.Load() {
+		return nil, ErrRelayTooOld
+	}
+
+	if kind == requestSubscribe {
+		candidate := c.snapshot()
+		if !slices.ContainsFunc(candidate, sub.Equal) {
+			candidate = append(candidate, sub)
+		}
+
+		if protocol.AttachmentBytes(candidate) > protocol.AttachmentBudget {
+			return nil, &protocol.Error{ID: "", Code: "limit", Message: "subscriptions would exceed 12288 bytes"}
+		}
+	}
+
+	if sub.HasFilters() {
+		c.gated.Add(1)
+		defer c.gated.Add(-1)
+
+		if !sess.capable {
+			_, err := c.roundTripWith(
+				ctx,
+				sess,
+				protocol.EncodeFilterList,
+				expectation{
+					kind:         requestList,
+					subscription: nil,
+					filters:      true,
+				},
+			)
+			if err != nil {
+				c.closeConn(ctx, sess.conn)
+
+				return nil, err
+			}
+
+			sess.capable = true
+		}
+	}
+
+	build := func(id string) []byte { return protocol.EncodeUnsubscribe(id, sub) }
+	if kind == requestSubscribe {
+		build = func(id string) []byte { return protocol.EncodeSubscribe(id, sub) }
+	}
+
+	subs, err := c.roundTripWith(
+		ctx,
+		sess,
+		build,
+		expectation{kind: kind, subscription: &sub, filters: sub.HasFilters()},
+	)
+	if sub.HasFilters() && errors.Is(err, ErrNoAnswer) {
+		c.closeConn(ctx, sess.conn)
+	}
+
+	return subs, err
+}
+
+func (c *Client) handleSubscriptions(ctx context.Context, message protocol.Subscriptions) bool {
+	c.mu.Lock()
+	expected, found := c.expected[message.ID]
+	c.mu.Unlock()
+
+	if expected.filters {
+		if !expected.accepts(message) {
+			c.incompatible.Store(true)
+
+			return false
+		}
+	}
+
+	if found && !c.replaying.Load() && (!expected.filters || expected.kind != requestList) {
+		c.replaceMirror(message.Subscriptions)
+	}
+
+	c.route(ctx, message.ID, reply{subscriptions: message.Subscriptions, err: nil})
+
+	return true
 }

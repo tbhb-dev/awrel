@@ -11,6 +11,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -63,6 +65,7 @@ func (b *syncBuffer) String() string {
 type stubRelay struct {
 	err   error
 	subs  []protocol.Subscription
+	last  protocol.Subscription
 	calls []string
 	mu    sync.Mutex
 }
@@ -85,6 +88,9 @@ func (r *stubRelay) List(context.Context) ([]protocol.Subscription, error) {
 
 func (r *stubRelay) change(verb string, sub protocol.Subscription) ([]protocol.Subscription, error) {
 	r.record(verb + " " + sub.Provider + "/" + sub.Event + "/" + sub.Repository)
+	r.mu.Lock()
+	r.last = sub
+	r.mu.Unlock()
 
 	return r.subs, r.err
 }
@@ -238,7 +244,13 @@ func awaitRequest(t *testing.T, seen <-chan *jsonrpc.Request) *jsonrpc.Request {
 }
 
 func newRelay() *stubRelay {
-	return &stubRelay{err: nil, subs: nil, calls: nil, mu: sync.Mutex{}}
+	return &stubRelay{
+		last:  protocol.Subscription{Provider: "", Event: "", Repository: ""},
+		err:   nil,
+		subs:  nil,
+		calls: nil,
+		mu:    sync.Mutex{},
+	}
 }
 
 func testEvent() protocol.Event {
@@ -340,12 +352,19 @@ func TestCompactOptionSetsTheDelivery(t *testing.T) {
 	}
 }
 
-// wantInstructions is a copy of Instructions written out apart from the code,
+// `wantInstructions` is a copy of Instructions written out apart from the code,
 // so that a change to the text shows up as a test failure.
+//
+//nolint:dupl // pins the instructions independently of the implementation
 const wantInstructions = "awrel relays webhook events into this session. Today the only provider is GitHub. Call " +
 	"`subscribe` with provider \"github\", an event name (the X-GitHub-Event value, " +
 	"such as \"pull_request\") and a repository \"owner/name\". " +
-	"Subscribe once per event and repository pair; anything less is refused. Matching events arrive as " +
+	"Subscribe once per event and repository pair; anything less is refused. " +
+	"Optional action and conclusion lists match any listed value; all supplied filters must match. " +
+	"Names and workflow paths match exactly, including case and spaces. " +
+	"Copy filters from list_subscriptions to remove that exact subscription. " +
+	"Compare check head_sha with the current pull request head before acting on success. " +
+	"Matching events arrive as " +
 	"`<channel source=\"awrel\" ...>` tags with attributes provider, event, action, repository, " +
 	"delivery and compact, with the webhook's JSON payload as the body. A payload over 64 KiB is " +
 	"replaced by a short note, and the attribute truncated is \"true\". When the attribute compact is " +
@@ -882,4 +901,169 @@ func TestNotifyingTransport(t *testing.T) {
 			t.Errorf("Notify = %v", err)
 		}
 	})
+}
+
+const (
+	workflowRunEvent  = "workflow_run"
+	failureConclusion = "failure"
+	actionKey         = "action"
+	conclusionKey     = "conclusion"
+	completedAction   = "completed"
+	filterNameKey     = "name"
+	workflowPathKey   = "workflow_path"
+)
+
+//nolint:gocognit // both tools exercise the same schema and validation cases
+func TestFilterToolSchemasAndValidation(t *testing.T) {
+	t.Parallel()
+
+	relay := newRelay()
+	rig := start(t, claudeCode, relay)
+	base := map[string]any{providerKey: githubName, eventKey: workflowRunEvent, repositoryKey: "Owner/Repo"}
+
+	for _, tool := range []string{subscribeTool, unsubscribeTool} {
+		for _, filter := range []map[string]any{
+			{actionKey: []string{}},
+			{actionKey: completedAction},
+			{actionKey: nil},
+			{actionKey: []any{1}},
+			{actionKey: []string{"completed\n"}},
+			{conclusionKey: []string{"Failure"}},
+			{filterNameKey: ""},
+			{filterNameKey: nil},
+			{filterNameKey: "CI\n"},
+			{filterNameKey: strings.Repeat("x", 129)},
+			{workflowPathKey: ""},
+			{workflowPathKey: nil},
+			{workflowPathKey: "a b.yml"},
+			{"unknown_filter": true},
+		} {
+			args := map[string]any{}
+			maps.Copy(args, base)
+
+			maps.Copy(args, filter)
+
+			ctx, cancel := context.WithTimeout(t.Context(), waitLimit)
+			result, err := rig.session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+
+			cancel()
+
+			if err == nil && !result.IsError {
+				t.Fatalf("%s accepted %+v", tool, args)
+			}
+		}
+
+		for _, args := range []map[string]any{
+			{providerKey: githubName, eventKey: "push", repositoryKey: ownerRepo, actionKey: []string{completedAction}},
+			{providerKey: githubName, eventKey: "check_suite", repositoryKey: ownerRepo, filterNameKey: "CI"},
+			{providerKey: githubName, eventKey: "workflow_job", repositoryKey: ownerRepo, workflowPathKey: "ci.yml"},
+		} {
+			result := callTool(t, rig, tool, args)
+			if !result.IsError {
+				t.Fatalf("accepted %+v", args)
+			}
+		}
+
+		args := map[string]any{
+			providerKey:     githubName,
+			eventKey:        workflowRunEvent,
+			repositoryKey:   "Owner/Repo",
+			actionKey:       []string{completedAction},
+			conclusionKey:   []string{"timed_out", failureConclusion, failureConclusion},
+			filterNameKey:   " CI / result ",
+			workflowPathKey: ".github/workflows/ci.yml",
+		}
+
+		result := callTool(t, rig, tool, args)
+		if result.IsError {
+			t.Fatal(textOf(t, result))
+		}
+	}
+
+	relay.mu.Lock()
+	last := relay.last
+	relay.mu.Unlock()
+
+	want := protocol.Subscription{
+		Provider:     githubName,
+		Event:        workflowRunEvent,
+		Repository:   "owner/repo",
+		Action:       []string{completedAction},
+		Conclusion:   []string{failureConclusion, "timed_out"},
+		Name:         " CI / result ",
+		WorkflowPath: ".github/workflows/ci.yml",
+	}
+	if !reflect.DeepEqual(last, want) {
+		t.Fatalf("tool lost filters: %+v", last)
+	}
+
+	if got := relay.seen(); len(got) != 2 {
+		t.Fatalf("invalid input reached relay: %v", got)
+	}
+}
+
+func TestFilterToolErrorsKeepCause(t *testing.T) {
+	t.Parallel()
+	rig := start(t, claudeCode, newRelay())
+	args := SubscriptionArgs{
+		Provider:   githubName,
+		Event:      pushEvent,
+		Repository: ownerRepo,
+		Action:     []string{completedAction},
+	}
+	_, _, subscribeErr := rig.server.subscribe(t.Context(), nil, args)
+
+	_, _, unsubscribeErr := rig.server.unsubscribe(t.Context(), nil, UnsubscribeArgs(args))
+	for _, err := range []error{subscribeErr, unsubscribeErr} {
+		if errors.Unwrap(err) == nil {
+			t.Fatalf("filter error lost its cause: %v", err)
+		}
+	}
+}
+
+func TestToolFilterBounds(t *testing.T) {
+	t.Parallel()
+
+	values := strings.Fields(strings.Repeat(strings.Repeat("x", 64)+" ", 8))
+	cases := []struct {
+		valid   any
+		invalid any
+		field   string
+	}{
+		{field: actionKey, valid: values, invalid: append(append([]string{}, values...), values[0])},
+		{field: conclusionKey, valid: values, invalid: append(append([]string{}, values...), values[0])},
+		{field: filterNameKey, valid: strings.Repeat("x", 128), invalid: strings.Repeat("x", 129)},
+		{field: workflowPathKey, valid: strings.Repeat("x", 256), invalid: strings.Repeat("x", 257)},
+	}
+
+	for _, tool := range []string{subscribeTool, unsubscribeTool} {
+		t.Run(tool, func(t *testing.T) {
+			t.Parallel()
+			rig := start(t, claudeCode, newRelay())
+
+			for _, test := range cases {
+				args := map[string]any{
+					providerKey:   githubName,
+					eventKey:      workflowRunEvent,
+					repositoryKey: ownerRepo,
+					test.field:    test.valid,
+				}
+
+				result := callTool(t, rig, tool, args)
+				if result.IsError {
+					t.Fatalf("valid %s bound: %s", test.field, textOf(t, result))
+				}
+
+				args[test.field] = test.invalid
+				ctx, cancel := context.WithTimeout(t.Context(), waitLimit)
+				denied, err := rig.session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+
+				cancel()
+
+				if err == nil && !denied.IsError {
+					t.Fatalf("accepted over-limit %s", test.field)
+				}
+			}
+		})
+	}
 }

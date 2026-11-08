@@ -5,6 +5,7 @@
     "name": "ci",
     "head_branch": "feat/compact-mcp",
     "head_sha": "d4b3c22e94a598f1c590df2dd6586d1dbb9ad494",
+    "path": ".github/workflows/ci.yml",
     "event": "pull_request",
     "status": "queued",
     "conclusion": null,

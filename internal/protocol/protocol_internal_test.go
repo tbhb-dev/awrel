@@ -80,8 +80,10 @@ func TestDecode(t *testing.T) {
 	}{
 		{
 			Subscriptions{
-				ID:            "1",
-				Subscriptions: []Subscription{{Provider: githubProvider, Event: "push", Repository: ownerRepo}},
+				ID: "1",
+				Subscriptions: []Subscription{
+					{Provider: githubProvider, Event: eventPush, Repository: ownerRepo},
+				},
 			},
 			"subscriptions",
 			`{"type":"subscriptions","id":"1","subscriptions":[{"provider":"github","event":"push","repository":"o/r"}]}`,
@@ -110,8 +112,8 @@ func TestDecode(t *testing.T) {
 		{
 			Event{
 				Repository: &repo,
-				Provider:   "github",
-				Event:      "push",
+				Provider:   githubProvider,
+				Event:      eventPush,
 				Delivery:   "d1",
 				Payload:    []byte(`{ "a" : [1, 2] }`),
 			},
@@ -158,8 +160,14 @@ func TestDecodeErrors(t *testing.T) {
 		{"invalid json", `{`, decodeMessage, false},
 		{"not an object", `[]`, decodeMessage, false},
 		{"type ill-typed", `{"type":1}`, decodeMessage, false},
-		{"type missing", `{"id":"1"}`, `message: missing field "type"`, true},
-		{"type null", `{"type":null}`, `message: missing field "type"`, true},
+		{
+			"type missing", `{"id":"1"}`,
+			`message: missing field "type"`, true,
+		},
+		{
+			"type null", `{"type":null}`,
+			`message: missing field "type"`, true,
+		},
 		{
 			"subscriptions ill-typed",
 			`{"type":"subscriptions","id":"1","subscriptions":{}}`,
@@ -181,8 +189,14 @@ func TestDecodeErrors(t *testing.T) {
 			`subscriptions: missing field "subscriptions"`, true,
 		},
 		{"error ill-typed", `{"type":"error","id":5,"code":"x","message":"y"}`, "decode error", false},
-		{"error missing code", `{"type":"error","id":"1","message":"y"}`, `error: missing field "code"`, true},
-		{"error missing message", `{"type":"error","id":"1","code":"x"}`, `error: missing field "message"`, true},
+		{
+			"error missing code", `{"type":"error","id":"1","message":"y"}`,
+			`error: missing field "code"`, true,
+		},
+		{
+			"error missing message", `{"type":"error","id":"1","code":"x"}`,
+			`error: missing field "message"`, true,
+		},
 		{
 			"event ill-typed",
 			`{"type":"event","provider":"p","event":1,"delivery":"d","payload":1}`,
@@ -251,5 +265,312 @@ func TestErrorText(t *testing.T) {
 	var err error = Error{ID: "1", Code: "limit", Message: "attachment full"}
 	if got, want := err.Error(), "limit: attachment full"; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+const (
+	eventPush               = "push"
+	suiteEvent              = "check_suite"
+	otherProvider           = "other"
+	incompleteFilterMessage = "filters require github, event and repository"
+	conclusionSuccess       = "success"
+	conclusionFailure       = "failure"
+	workflowFile            = ".github/workflows/CI.yml"
+	exactName               = " CI "
+)
+
+func TestFilterValidation(t *testing.T) {
+	t.Parallel()
+
+	valid := Subscription{
+		Provider:     githubProvider,
+		Event:        eventWorkflowRun,
+		Repository:   "Owner/Repo",
+		Action:       []string{"completed", "future.action-1_"},
+		Conclusion:   []string{conclusionFailure},
+		Name:         " CI / result ",
+		WorkflowPath: workflowFile,
+	}
+
+	validErr := valid.ValidateFilters()
+	if validErr != nil {
+		t.Fatal(validErr)
+	}
+
+	cases := []struct {
+		change func(*Subscription)
+		name   string
+	}{
+		{name: "provider", change: func(s *Subscription) { s.Provider = otherProvider }},
+		{name: "event absent", change: func(s *Subscription) { s.Event = "" }},
+		{name: "repository absent", change: func(s *Subscription) { s.Repository = "" }},
+		{name: "actionless", change: func(s *Subscription) { s.Event = eventPush }},
+		{name: "empty action", change: func(s *Subscription) { s.Action = []string{} }},
+		{
+			name:   "too many duplicates",
+			change: func(s *Subscription) { s.Action = strings.Split(strings.Repeat("x,", 8)+"x", ",") },
+		},
+		{name: "invalid action", change: func(s *Subscription) { s.Action = []string{"Completed"} }},
+		{name: "newline action", change: func(s *Subscription) { s.Action = []string{"completed\n"} }},
+		{name: "empty action value", change: func(s *Subscription) { s.Action = []string{""} }},
+		{name: "long action", change: func(s *Subscription) { s.Action = []string{strings.Repeat("x", 65)} }},
+		{name: "conclusion event", change: func(s *Subscription) { s.Event = "issues" }},
+		{name: "empty conclusion", change: func(s *Subscription) { s.Conclusion = []string{} }},
+		{name: "invalid conclusion", change: func(s *Subscription) { s.Conclusion = []string{"success!"} }},
+		{name: "suite name", change: func(s *Subscription) { s.Event = suiteEvent }},
+		{name: "control name", change: func(s *Subscription) { s.Name = "CI\n" }},
+		{name: "unicode name", change: func(s *Subscription) { s.Name = "café" }},
+		{name: "long name", change: func(s *Subscription) { s.Name = strings.Repeat("x", 129) }},
+		{name: "job path", change: func(s *Subscription) { s.Event = "workflow_job" }},
+		{name: "invalid path", change: func(s *Subscription) { s.WorkflowPath = "work flow.yml" }},
+		{name: "long path", change: func(s *Subscription) { s.WorkflowPath = strings.Repeat("x", 257) }},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			sub := valid
+			test.change(&sub)
+
+			err := sub.ValidateFilters()
+			if err == nil {
+				t.Fatal("accepted invalid filter")
+			}
+		})
+	}
+
+	for _, sub := range []Subscription{
+		{Provider: "", Event: "", Repository: ""},
+		{Provider: githubProvider, Event: "", Repository: ""},
+		{Provider: githubProvider, Event: eventCheckRun, Repository: ownerRepo, Name: "x"},
+		{Provider: githubProvider, Event: suiteEvent, Repository: ownerRepo, Conclusion: []string{conclusionSuccess}},
+		{
+			Provider: githubProvider, Event: eventWorkflowRun, Repository: ownerRepo,
+			Name: strings.Repeat("~", 128), WorkflowPath: strings.Repeat("/", 256),
+			Action: []string{strings.Repeat("a", 64), "b", "c", "d", "e", "f", "g", "h"},
+		},
+	} {
+		err := sub.ValidateFilters()
+		if err != nil {
+			t.Fatalf("%+v: %v", sub, err)
+		}
+	}
+}
+
+func TestCanonicalIdentity(t *testing.T) {
+	t.Parallel()
+
+	sub := Subscription{
+		Provider:     githubProvider,
+		Event:        eventWorkflowRun,
+		Repository:   "Owner/Repo",
+		Action:       []string{"z", "a", "z"},
+		Conclusion:   []string{conclusionSuccess, conclusionFailure, conclusionFailure},
+		Name:         exactName,
+		WorkflowPath: workflowFile,
+	}
+	want := Subscription{
+		Provider:     githubProvider,
+		Event:        eventWorkflowRun,
+		Repository:   "owner/repo",
+		Action:       []string{"a", "z"},
+		Conclusion:   []string{conclusionFailure, conclusionSuccess},
+		Name:         exactName,
+		WorkflowPath: workflowFile,
+	}
+
+	got := sub.Canonical()
+	if !reflect.DeepEqual(got, want) || !sub.Equal(want) {
+		t.Fatalf("canonical = %+v", got)
+	}
+
+	got.Action[0] = "changed"
+
+	got.Conclusion[0] = "changed"
+	if sub.Action[0] != "z" || sub.Conclusion[0] != conclusionSuccess {
+		t.Fatal("aliased lists")
+	}
+
+	for _, change := range []func(*Subscription){
+		func(s *Subscription) { s.Provider = otherProvider },
+		func(s *Subscription) { s.Event = eventCheckRun },
+		func(s *Subscription) { s.Repository = ownerRepo },
+		func(s *Subscription) { s.Action = nil },
+		func(s *Subscription) { s.Conclusion = nil },
+		func(s *Subscription) { s.Name = "CI" },
+		func(s *Subscription) { s.WorkflowPath = ".github/workflows/ci.yml" },
+	} {
+		other := want
+		change(&other)
+
+		if sub.Equal(other) {
+			t.Fatalf("equal to %+v", other)
+		}
+	}
+
+	for _, filtered := range []Subscription{
+		{Provider: "", Event: "", Repository: "", Action: []string{"a"}},
+		{Provider: "", Event: "", Repository: "", Conclusion: []string{"a"}},
+		{Provider: "", Event: "", Repository: "", Name: "n"},
+		{Provider: "", Event: "", Repository: "", WorkflowPath: "p"},
+	} {
+		if !filtered.HasFilters() {
+			t.Fatal("missing filter")
+		}
+	}
+}
+
+func TestFilterWireAndAttachment(t *testing.T) {
+	t.Parallel()
+
+	sub := Subscription{
+		Provider:     githubProvider,
+		Event:        eventWorkflowRun,
+		Repository:   "O/R",
+		Action:       []string{"z", "a", "z"},
+		Conclusion:   []string{conclusionSuccess},
+		Name:         ` <CI> & "x"\ `,
+		WorkflowPath: ".github/workflows/ci.yml",
+	}
+	for _, data := range [][]byte{EncodeSubscribe("1", sub), EncodeUnsubscribe("1", sub)} {
+		text := string(data)
+		for _, part := range []string{
+			`"subscription_filters":true`,
+			`"action":["a","z"]`,
+			`"conclusion":["success"]`,
+			`"repository":"o/r"`,
+			`"workflow_path":".github/workflows/ci.yml"`,
+			`<CI> &`,
+		} {
+			if !strings.Contains(text, part) {
+				t.Fatalf("%s lacks %s", text, part)
+			}
+		}
+	}
+
+	if got := string(EncodeFilterList("probe")); got != `{"type":"list","id":"probe","subscription_filters":true}` {
+		t.Fatal(got)
+	}
+
+	data := `{"type":"subscriptions","id":"1","subscription_filters":true,` +
+		`"subscriptions":[{"provider":"github","event":"workflow_run","repository":"o/r","action":["a",` +
+		`"z"],"conclusion":["success"],"name":" CI ","workflow_path":"ci.yml"}]}`
+
+	msg, err := Decode([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reply, ok := msg.(Subscriptions)
+	if !ok {
+		t.Fatalf("reply = %T", msg)
+	}
+
+	want := sub.Canonical()
+	want.Name = exactName
+
+	want.WorkflowPath = "ci.yml"
+	if !reply.SubscriptionFilters || !reply.Subscriptions[0].Equal(want) {
+		t.Fatalf("%+v", reply)
+	}
+
+	if AttachmentBytes(nil) != 20 {
+		t.Fatal("empty wrapper size")
+	}
+	// JSON.stringify leaves HTML characters literal and escapes quotes and backslashes.
+	expected := `{"subscriptions":[{"provider":"github","event":"workflow_run","repository":"o/r","action":["a",` +
+		`"z"],"conclusion":["success"],"name":" <CI> & \"x\"\\ ",` +
+		`"workflow_path":".github/workflows/ci.yml"}]}`
+	if got := AttachmentBytes([]Subscription{sub}); got != len(expected) {
+		t.Fatalf("size %d, want %d: %s", got, len(expected), mustMarshal(sub.Canonical()))
+	}
+}
+
+func TestFilterErrorsAndEventSupport(t *testing.T) {
+	t.Parallel()
+
+	if AttachmentBudget != 12288 {
+		t.Fatal("attachment budget changed")
+	}
+
+	cases := []struct {
+		sub     Subscription
+		message string
+	}{
+		{
+			Subscription{Provider: otherProvider, Event: eventCheckRun, Repository: ownerRepo, Name: "CI"},
+			incompleteFilterMessage,
+		},
+		{
+			Subscription{Provider: githubProvider, Event: "", Repository: ownerRepo, Name: "CI"},
+			incompleteFilterMessage,
+		},
+		{
+			Subscription{Provider: githubProvider, Event: eventCheckRun, Repository: "", Name: "CI"},
+			incompleteFilterMessage,
+		},
+		{
+			Subscription{Provider: githubProvider, Event: suiteEvent, Repository: ownerRepo, Name: "CI"},
+			"name needs a supported event and 1 to 128 printable ASCII characters",
+		},
+		{
+			Subscription{Provider: githubProvider, Event: eventCheckRun, Repository: ownerRepo, Name: "CI\n"},
+			"name needs a supported event and 1 to 128 printable ASCII characters",
+		},
+		{
+			Subscription{
+				Provider:   githubProvider,
+				Event:      eventPush,
+				Repository: ownerRepo,
+				Action:     []string{"completed"},
+			},
+			"action is unsupported for push",
+		},
+		{
+			Subscription{
+				Provider:   githubProvider,
+				Event:      "issues",
+				Repository: ownerRepo,
+				Conclusion: []string{conclusionSuccess},
+			},
+			"conclusion is unsupported for issues",
+		},
+		{
+			Subscription{Provider: githubProvider, Event: eventCheckRun, Repository: ownerRepo, Conclusion: []string{}},
+			"conclusion needs 1 to 8 values",
+		},
+		{
+			Subscription{
+				Provider:   githubProvider,
+				Event:      eventCheckRun,
+				Repository: ownerRepo,
+				Conclusion: []string{"success!"},
+			},
+			"invalid conclusion value",
+		},
+		{
+			Subscription{Provider: githubProvider, Event: eventCheckRun, Repository: ownerRepo, WorkflowPath: "ci.yml"},
+			"workflow_path needs workflow_run and 1 to 256 path characters",
+		},
+	}
+	for _, test := range cases {
+		err := test.sub.ValidateFilters()
+		if !errors.Is(err, errFilter) || err.Error() != "bad subscription filter: "+test.message {
+			t.Fatalf("%+v: %v", test.sub, err)
+		}
+	}
+
+	for _, event := range actionEvents {
+		sub := Subscription{
+			Provider:   githubProvider,
+			Event:      event,
+			Repository: ownerRepo,
+			Action:     []string{"future.action-1"},
+		}
+
+		err := sub.ValidateFilters()
+		if err != nil {
+			t.Fatalf("%s: %v", event, err)
+		}
 	}
 }

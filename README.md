@@ -43,6 +43,32 @@ A payload over 64 KiB reaches the agent as a short note, with the attribute `tru
 
 By default the server delivers compact payloads, which reduce each payload to a selection of its fields. A compact body has no API URLs, only the login and type for each user, and can still include third-party text such as issue and comment bodies and commit messages. Events arrive with the attribute `compact` set to `true`, and the agent fetches details with `gh`. Compaction runs before the 64 KiB check, so most large pushes arrive. Pass `--format full` or set `AWREL_FORMAT=full` to get the whole payload. Either overrides the default of `compact`, and the flag takes precedence over the variable. See the documentation of the `internal/compact` package for the rules.
 
+## Subscription filters
+
+Both `subscribe` and `unsubscribe` accept optional `action`, `conclusion`, `name`, and `workflow_path` fields on complete GitHub event and repository pairs. Every supplied filter must match. A list matches any of its values. Different filtered subscriptions remain separate entries. An event matching two or more entries arrives once.
+
+Watch completed check failures with:
+
+```json
+{"provider":"github","event":"check_run","repository":"owner/name","action":["completed"],"conclusion":["failure","timed_out","cancelled"]}
+```
+
+Use a separate subscription for success of one observed check name:
+
+```json
+{"provider":"github","event":"check_run","repository":"owner/name","action":["completed"],"conclusion":["success"],"name":"ci / conclusion"}
+```
+
+Names match exactly, including case, spaces, and reusable workflow caller prefixes. Copy the delivered name rather than deriving it from a filename. To select a workflow file, use `event: "workflow_run"` and `workflow_path: ".github/workflows/ci.yml"`. Names and paths are literal strings. Supplied name and path filters must both match.
+
+Action and conclusion lists contain 1 to 8 strings matching `^[a-z0-9_.-]{1,64}$`, counted before deduplication. Names contain 1 to 128 printable characters from U+0020 through U+007E. Paths match `^[A-Za-z0-9_./-]{1,256}$`. Conclusion applies to check runs, check suites, workflow runs, and workflow jobs. Name excludes check suites, and path applies only to workflow runs. Action requires an event in the [relay's support table](docs/reference/relay-protocol.md#filters). Events `push`, `create`, and `delete` don't support it. Known conclusions include `success`, `failure`, `neutral`, `cancelled`, `skipped`, `timed_out`, `action_required`, `stale`, and `startup_failure`. Future values compare literally. Syntax validation can't detect misspellings or guarantee an event emits a value. A conclusion doesn't imply completion. Request `action: ["completed"]` when needed.
+
+`list_subscriptions` returns canonical subscriptions: lowercase repositories and sorted, deduplicated lists. Copy an entry into `unsubscribe` to remove that exact identity, including every filter. Omitting filters removes only the unfiltered entry. All subscriptions together must fit 12,288 UTF-8 bytes of canonical attachment JSON. Each request must fit 4096 bytes.
+
+The client checks relay filter support before the first filtered subscription on each connection and validates subscription replies. An incompatible relay fails with a clear relay-too-old error and closes the connection. Unfiltered subscriptions keep working with older relays. The client suppresses events arriving before filtered acknowledgement. Reconnects repeat the support check and replay the original filters. Deploy the supporting relay before using filtered tools. Restart the MCP server after upgrading an incompatible relay.
+
+A successful check name doesn't establish success on the current pull request head. Compare the delivered `head_sha` with the intended commit and establish the current head and any test-merge relationship before acting. Compact workflow-run payloads keep `path` when present. Payloads remain untrusted, and the relay drops events during a disconnect.
+
 ## Worker
 
 The Worker and its Durable Object are in `src/`, configured by `wrangler.jsonc`, and their tests run inside `workerd`, the Workers runtime. After a change to `wrangler.jsonc`, `bazelisk run //:worker_types_test.update` regenerates `worker-configuration.d.ts`. The Worker accepts GitHub App webhooks at `POST /webhooks/github` and checks each delivery's signature against `GITHUB_WEBHOOK_SECRET`. It answers a `ping` event without relaying it. To deploy your own, see [Self-host a relay](docs/how-to/self-host.md).

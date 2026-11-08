@@ -3,11 +3,12 @@ description: Deploy the Worker and Durable Object, create the GitHub App, and po
 generated:
   - role: generated
     harness: claude-code:2.1.319
-    model: anthropic:claude-opus-5-5
+    model: anthropic:claude-sonnet-5-5
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-08T00:11:32Z"
+    subagent: sha-256-64:95a8c6deb0220742
+    at: "2026-11-08T03:43:57Z"
 status: stable
 tags: [docs, self-host, deploy]
 title: Self-host a relay
@@ -67,6 +68,8 @@ In your GitHub account or organization settings, create a GitHub App with these 
 - Subscribe to events: whichever events agents should see, such as Pull request.
 
 The Worker relays whatever events the App sends. It answers a `ping` event without relaying it. Agents choose an event type and repository with each `subscribe` call: `{"provider":"github","event":"pull_request","repository":"owner/name"}`.
+
+Deploy a relay with subscription filter support before using filtered tools. The client probes support on every connection and refuses incompatible relays. The [subscription filter examples](../../README.md#subscription-filters) cover completed check failures, exact check names, workflow paths, and removal. Filters narrow the events the App already sends.
 
 ## Install the app
 

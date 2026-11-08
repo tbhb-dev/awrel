@@ -705,13 +705,13 @@ func TestKeepListChecks(t *testing.T) {
 				`"head_branch":"b","head_sha":"s","event":"push","run_attempt":2,"html_url":"h","path":"p",` +
 				`"pull_requests":[{"number":5,"id":7}],"actor":{"login":"a"}}}`,
 			`{"workflow_run":{"id":1,"name":"CI","status":"completed","conclusion":"success",` +
-				`"head_branch":"b","head_sha":"s","event":"push","run_attempt":2,"html_url":"h",` +
+				`"head_branch":"b","head_sha":"s","event":"push","run_attempt":2,"html_url":"h","path":"p",` +
 				`"pull_requests":[{"number":5}]}}`,
 		},
 		{
 			"workflow_job",
 			"workflow_job",
-			`{"workflow_job":{"id":1,"name":"test","steps":[1],"run_id":4,"html_url":"h","conclusion":null}}`,
+			`{"workflow_job":{"id":1,"name":"test","path":"p","steps":[1],"run_id":4,"html_url":"h","conclusion":null}}`,
 			`{"workflow_job":{"id":1,"name":"test","html_url":"h","conclusion":null}}`,
 		},
 		{
