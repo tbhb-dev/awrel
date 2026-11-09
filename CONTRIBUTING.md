@@ -15,7 +15,7 @@ bazelisk test //...
 This section describes the maintainers' own tooling. You don't need it to contribute: open a pull request the usual way.
 
 - `tbhbdev alpha install` installs the user-level harness hooks once per machine. Each session start then installs the clone's git hooks.
-- `mise run pr` runs `tbhbdev alpha pr`, which checks `.github/PULL_REQUEST_DRAFT.md` and opens or edits the PR from it, and `mise run merge` runs `tbhbdev alpha merge`, which squash-merges an approved PR. `tbhbdev` comes from the public tbhb-dev/tools repository.
+- Agents run `tbhbdev alpha pr` directly, which checks `.github/PULL_REQUEST_DRAFT.md` and opens or edits the PR from it, and `tbhbdev alpha merge` directly, which squash-merges an approved PR. `tbhbdev` comes from the public tbhb-dev/tools repository.
 - The deny rules in `.claude/settings.json` and `.codex/rules/` block `gh pr create`, `gh pr edit` and `gh pr merge`.
 
 ## Maintainer configuration

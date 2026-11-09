@@ -38,14 +38,3 @@ _.path = [".bazel_env/bin"]
 [tools]
 bazelisk = "1.30.0"
 uv = "0.13.6"
-
-# Check a PR draft and open or update the PR from it (tbhbdev alpha):
-# Usage: mise run pr -- check | create [--dry-run] | edit --pr N
-[tasks.pr]
-description = "Check a PR draft and open or update the PR from it (tbhbdev alpha)"
-run = "tbhbdev alpha pr"
-
-# Usage: mise run merge -- PR [--dry-run].
-[tasks.merge]
-description = "Squash-merge an approved PR with a plain-text commit message (tbhbdev alpha)"
-run = "tbhbdev alpha merge"
