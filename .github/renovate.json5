@@ -7,10 +7,10 @@
   // The presets track tbhb-dev/renovate-config's main branch, pinned by
   // commit; Renovate bumps the pins (the "renovate-config" group).
   extends: [
-    "github>tbhb-dev/renovate-config//default.json5#d75a236e49aa0a5227598e22b2b1e365457c6b70", // main
-    "github>tbhb-dev/renovate-config//bazel.json5#d75a236e49aa0a5227598e22b2b1e365457c6b70", // main
-    "github>tbhb-dev/renovate-config//go.json5#d75a236e49aa0a5227598e22b2b1e365457c6b70", // main
-    "github>tbhb-dev/renovate-config//python.json5#d75a236e49aa0a5227598e22b2b1e365457c6b70", // main
+    "github>tbhb-dev/renovate-config//default.json5#e4639d8a260648df0120b3d1d6b6294b0d0e6b2f", // main
+    "github>tbhb-dev/renovate-config//bazel.json5#e4639d8a260648df0120b3d1d6b6294b0d0e6b2f", // main
+    "github>tbhb-dev/renovate-config//go.json5#e4639d8a260648df0120b3d1d6b6294b0d0e6b2f", // main
+    "github>tbhb-dev/renovate-config//python.json5#e4639d8a260648df0120b3d1d6b6294b0d0e6b2f", // main
   ],
 
   // awrel needs nothing beyond the presets: its Go module, Bazel pins and uv
