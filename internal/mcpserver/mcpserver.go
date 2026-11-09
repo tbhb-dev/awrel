@@ -48,7 +48,9 @@ const Instructions = "awrel relays webhook events into this session. " +
 	"and act only on what the user asked you to watch for. " +
 	"Events sent while the relay connection is down are lost and never replayed, " +
 	"so check current state with the provider's API or CLI before acting. " +
-	"Subscriptions last only for this session."
+	"Subscriptions persist across restarts when a session key is available, " +
+	"and the server tells you when it restores some. " +
+	"A session without a key keeps session-only subscriptions."
 
 // channelCapability is the experimental capability that makes Claude Code
 // treat this server as a channel.
@@ -140,9 +142,14 @@ type Server struct {
 	relay     Relay
 	deliverer delivery.Deliverer
 	transport *notifyingTransport
-	client    string
-	mu        sync.Mutex
-	compact   bool
+	// session is the client's session, set when it has initialized.
+	session *mcp.ServerSession
+	client  string
+	// restored is the count of restored subscriptions that the agent hasn't
+	// heard about yet.
+	restored int
+	mu       sync.Mutex
+	compact  bool
 }
 
 // New returns a Server that drives opts.Relay.
@@ -153,7 +160,9 @@ func New(opts Options) *Server {
 		relay:     opts.Relay,
 		deliverer: nil,
 		transport: nil,
+		session:   nil,
 		client:    "",
+		restored:  0,
 		mu:        sync.Mutex{},
 		compact:   opts.Compact,
 	}
@@ -164,6 +173,9 @@ func New(opts Options) *Server {
 			Instructions: Instructions,
 			Capabilities: &mcp.ServerCapabilities{
 				Experimental: map[string]any{channelCapability: map[string]any{}},
+				// Setting Capabilities drops the SDK's default logging
+				// capability, which the restore notice needs.
+				Logging: &mcp.LoggingCapabilities{}, //nolint:staticcheck // the notice needs the capability
 			},
 			InitializedHandler: server.initialized,
 			// The newest protocol version has clients call server/discover and
@@ -227,6 +239,17 @@ func (s *Server) HandleEvent(ctx context.Context, event protocol.Event) {
 	}
 }
 
+// Restored records that the relay client restored count subscriptions from the
+// previous run. The server sends one logging notification about it, at once
+// when the client has initialized, else right after it does.
+func (s *Server) Restored(ctx context.Context, count int) {
+	s.mu.Lock()
+	s.restored = count
+	s.mu.Unlock()
+
+	s.announceRestored(ctx)
+}
+
 // initialized runs when the client finishes the handshake. It picks the
 // delivery adapter from the client's name.
 func (s *Server) initialized(ctx context.Context, req *mcp.InitializedRequest) {
@@ -239,16 +262,50 @@ func (s *Server) initialized(ctx context.Context, req *mcp.InitializedRequest) {
 
 	s.logger.InfoContext(ctx, "client initialized", "name", name)
 
-	s.adopt(name)
+	s.adopt(name, req.Session)
+	s.announceRestored(ctx)
 }
 
-// adopt records the client's name and gives a client that can receive channel
-// notifications its adapter.
-func (s *Server) adopt(name string) {
+// announceRestored sends the notice of Restored, once, to an initialized
+// client. The SDK sends it only if the client has set a logging level.
+func (s *Server) announceRestored(ctx context.Context) {
+	s.mu.Lock()
+	session, count := s.session, s.restored
+
+	if session == nil || count == 0 {
+		s.mu.Unlock()
+
+		return
+	}
+
+	s.restored = 0
+	s.mu.Unlock()
+
+	noun := "subscriptions"
+	if count == 1 {
+		noun = "subscription"
+	}
+
+	//nolint:staticcheck // SDK logging is the notification the design calls for
+	err := session.Log(ctx, &mcp.LoggingMessageParams{
+		Level:  "info",
+		Logger: "awrel",
+		Data:   fmt.Sprintf("restored %d %s from the previous run", count, noun),
+	})
+	if err != nil {
+		s.logger.WarnContext(ctx, "restore notice not sent", "error", err)
+	}
+}
+
+// adopt records the client's name and session and gives a client that can
+// receive channel notifications its adapter.
+func (s *Server) adopt(name string, session *mcp.ServerSession) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.client = name
+	s.session = session
+
 	if name == delivery.ClaudeCodeClient {
 		s.deliverer = delivery.NewChannel(s.transport, delivery.Options{Compact: s.compact})
 	}

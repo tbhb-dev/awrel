@@ -5,6 +5,7 @@
 # Import contracts: the command sits on the internal packages. The chain,
 # leaf first, is protocol, transport, relayclient; compact is a leaf; delivery
 # builds on compact and protocol, and mcpserver on delivery and protocol.
+# persist builds on protocol; the command wires it to relayclient.
 # internal/buildmeta imports nothing of the module. Every package must belong
 # to a component.
 version: 3
@@ -22,6 +23,7 @@ components:
   compact: {in: internal/compact}
   delivery: {in: internal/delivery}
   mcpserver: {in: internal/mcpserver}
+  persist: {in: internal/persist}
 
 vendors:
   cobra: {in: [github.com/spf13/cobra, github.com/spf13/cobra/**]}
@@ -30,7 +32,7 @@ vendors:
 
 deps:
   cmd:
-    mayDependOn: [buildmeta, protocol, transport, relayclient, mcpserver]
+    mayDependOn: [buildmeta, protocol, transport, relayclient, mcpserver, persist]
     canUse: [cobra, websocket]  # its tests' fake relay accepts with coder/websocket
   buildmeta:
     mayDependOn: [buildmeta]  # a leaf; go-arch-lint rejects an empty list
@@ -49,3 +51,5 @@ deps:
   mcpserver:
     mayDependOn: [delivery, protocol]
     canUse: [mcpsdk]
+  persist:
+    mayDependOn: [protocol]

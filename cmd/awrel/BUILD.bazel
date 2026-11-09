@@ -17,6 +17,7 @@ go_library(
     deps = [
         "//internal/buildmeta",
         "//internal/mcpserver",
+        "//internal/persist",
         "//internal/protocol",
         "//internal/relayclient",
         "//internal/transport",
@@ -35,11 +36,13 @@ go_test(
     srcs = [
         "main_internal_test.go",
         "mcp_internal_test.go",
+        "persist_internal_test.go",
     ],
     embed = [":awrel_lib"],
     # The whole-module Go checks in the root package take the tests too.
     visibility = ["//:__pkg__"],
     deps = [
+        "//internal/persist",
         "//internal/protocol",
         "@com_github_coder_websocket//:websocket",
         "@com_github_spf13_cobra//:cobra",

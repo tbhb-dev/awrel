@@ -21,6 +21,7 @@ import (
 
 	"go.tbhb.dev/awrel/internal/buildmeta"
 	"go.tbhb.dev/awrel/internal/mcpserver"
+	"go.tbhb.dev/awrel/internal/persist"
 	"go.tbhb.dev/awrel/internal/protocol"
 	"go.tbhb.dev/awrel/internal/relayclient"
 	"go.tbhb.dev/awrel/internal/transport"
@@ -29,6 +30,7 @@ import (
 const (
 	endpointEnv   = "AWREL_ENDPOINT"
 	formatEnv     = "AWREL_FORMAT"
+	sessionFlag   = "session-id"
 	formatCompact = "compact"
 	formatFull    = "full"
 	defaultFormat = formatCompact
@@ -180,7 +182,12 @@ func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTi
 				return err
 			}
 
-			return serveMCP(cmd, stdin, endpoint, compact, getenv, requestTimeout)
+			sessionID, err := cmd.Flags().GetString(sessionFlag)
+			if err != nil {
+				return err //nolint:wrapcheck // pflag's message names the flag
+			}
+
+			return serveMCP(cmd, stdin, endpoint, compact, persist.Key(sessionID, getenv), getenv, requestTimeout)
 		},
 	}
 	cmd.Flags().
@@ -195,8 +202,8 @@ func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTi
 // serveMCP runs the MCP server on stdin and stdout until the input ends or a
 // signal arrives, and the relay connection alongside it.
 func serveMCP(
-	cmd *cobra.Command, stdin io.Reader, endpoint string, compact bool, getenv func(string) string,
-	requestTimeout time.Duration,
+	cmd *cobra.Command, stdin io.Reader, endpoint string, compact bool, sessionKey string,
+	getenv func(string) string, requestTimeout time.Duration,
 ) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -209,10 +216,14 @@ func serveMCP(
 		ctx,
 		logger,
 		endpoint,
+		sessionKey,
 		getenv,
 		requestTimeout,
 		func(ctx context.Context, event protocol.Event) {
 			server.HandleEvent(ctx, event)
+		},
+		func(ctx context.Context, count int) {
+			server.Restored(ctx, count)
 		},
 	)
 	server = mcpserver.New(mcpserver.Options{
@@ -243,16 +254,18 @@ func serveMCP(
 
 // connectRelay returns the Relay for the tools and the function that keeps its
 // connection. If the endpoint or the token is missing, the Relay fails every call and the
-// function returns at once.
+// function returns at once. A session key makes it save the subscriptions
+// and restore the saved ones, and it reports how many through the restored callback.
 //
 //nolint:ireturn // the tools take the Relay interface
 func connectRelay(
 	ctx context.Context,
 	logger *slog.Logger,
-	endpoint string,
+	endpoint, sessionKey string,
 	getenv func(string) string,
 	requestTimeout time.Duration,
 	onEvent func(context.Context, protocol.Event),
+	onRestored func(context.Context, int),
 ) (mcpserver.Relay, func(context.Context)) {
 	if endpoint == "" {
 		logger.ErrorContext(ctx, "no relay endpoint; every tool will fail", "error", errNoEndpoint)
@@ -268,11 +281,26 @@ func connectRelay(
 	}
 
 	dialer := &transport.Dialer{HTTPClient: nil, URL: endpoint, Token: token}
+
+	// A nil *persist.Store must not become a non-nil Store.
+	var store relayclient.Store
+
+	var initial []protocol.Subscription
+
+	saved := persist.Open(sessionKey, endpoint, getenv, logger, time.Now())
+	if saved != nil {
+		store = saved
+		initial = saved.Load()
+	}
+
 	client := relayclient.New(relayclient.Options{
-		Dial:    dialer.Dial,
-		OnEvent: onEvent,
-		Logger:  logger,
-		Rand:    nil,
+		Dial:       dialer.Dial,
+		OnEvent:    onEvent,
+		Logger:     logger,
+		Store:      store,
+		OnRestored: onRestored,
+		Initial:    initial,
+		Rand:       nil,
 		// gomutants:disable-next-line INTEGER_INCREMENT,INTEGER_DECREMENT reason="zero picks the default"
 		MinBackoff: 0,
 		// gomutants:disable-next-line INTEGER_INCREMENT,INTEGER_DECREMENT reason="zero picks the default"

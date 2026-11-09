@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"go.tbhb.dev/awrel/internal/buildmeta"
+	"go.tbhb.dev/awrel/internal/persist"
 )
 
 func main() {
@@ -48,10 +49,18 @@ func newRootCmd(stdin io.Reader, getenv func(string) string) *cobra.Command {
 		Version:      versionString(),
 		SilenceUsage: true,
 	}
+	addSessionFlag(root)
 	root.SetVersionTemplate("awrel {{.Version}}\n")
 	root.AddCommand(newVersionCmd(), newMCPCmd(stdin, getenv))
 
 	return root
+}
+
+// addSessionFlag gives root the flag that every subcommand inherits.
+func addSessionFlag(root *cobra.Command) {
+	root.PersistentFlags().String(sessionFlag, "",
+		"session key that names the saved subscriptions (default $"+persist.SessionEnv+
+			", then the agent's session variable)")
 }
 
 func newVersionCmd() *cobra.Command {

@@ -123,6 +123,7 @@ GO_TARGETS = [
     "//internal/compact:compact_test",
     "//internal/delivery:delivery_test",
     "//internal/mcpserver:mcpserver_test",
+    "//internal/persist:persist_test",
     "//internal/protocol:protocol_test",
     "//internal/relayclient:relayclient_test",
     "//internal/transport:transport_test",
@@ -202,6 +203,7 @@ gomutants_test(
         "//internal/compact:compact_test",
         "//internal/delivery:delivery_test",
         "//internal/mcpserver:mcpserver_test",
+        "//internal/persist:persist_test",
         "//internal/protocol:protocol_test",
         "//internal/relayclient:relayclient_test",
         "//internal/transport:transport_test",
@@ -247,6 +249,13 @@ gobco_test(
     go_sum = "go.sum",
     proxy = "@go_mod_proxy//:proxy",
     tests = ["//internal/mcpserver:mcpserver_test"],
+)
+
+gobco_test(
+    name = "persist_gobco_test",
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    tests = ["//internal/persist:persist_test"],
 )
 
 gobco_test(

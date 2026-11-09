@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Tony Burns
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@tbhb_rules//repo:defs.bzl", "repo_files")
+
+repo_files()
+
+go_library(
+    name = "persist",
+    srcs = [
+        "lock_other.go",
+        "lock_unix.go",
+        "persist.go",
+    ],
+    importpath = "go.tbhb.dev/awrel/internal/persist",
+    visibility = ["//:__subpackages__"],
+    deps = ["//internal/protocol"],
+)
+
+go_test(
+    name = "persist_test",
+    srcs = [
+        "lock_unix_internal_test.go",
+        "persist_internal_test.go",
+    ],
+    embed = [":persist"],
+    # The whole-module Go checks in the root package take the tests too.
+    visibility = ["//:__pkg__"],
+    deps = ["//internal/protocol"],
+)
