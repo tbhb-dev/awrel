@@ -26,8 +26,14 @@ import (
 )
 
 const (
-	providerGitHub = "github"
-	pushEvent      = "push"
+	providerGitHub          = "github"
+	pushEvent               = "push"
+	awrelProvider           = "awrel"
+	echoEvent               = "echo"
+	filterPendingReason     = "filter request pending"
+	eventKey                = "event"
+	relayIncompatibleReason = "relay incompatible"
+	replayPendingReason     = "replay pending"
 )
 
 func subA() protocol.Subscription {
@@ -1973,7 +1979,7 @@ func TestStatus(t *testing.T) {
 func TestGatedEventOutcomes(t *testing.T) {
 	t.Parallel()
 
-	for _, reason := range []string{"filter request pending", "replay pending", "relay incompatible"} {
+	for _, reason := range []string{filterPendingReason, replayPendingReason, relayIncompatibleReason} {
 		t.Run(reason, func(t *testing.T) {
 			t.Parallel()
 
@@ -2041,11 +2047,11 @@ func assertGatedLog(t *testing.T, logs *bytes.Buffer, reason, repo string) {
 
 	want := map[string]any{
 		"level":      "INFO",
-		"msg":        "event",
+		"msg":        eventKey,
 		"outcome":    "gated",
 		"delivery":   "d1",
 		"provider":   providerGitHub,
-		"event":      "issue_comment",
+		eventKey:     "issue_comment",
 		"repository": repo,
 		"action":     "created",
 		"reason":     reason,
@@ -2057,12 +2063,12 @@ func assertGatedLog(t *testing.T, logs *bytes.Buffer, reason, repo string) {
 
 func setEventGate(client *Client, reason string) {
 	switch reason {
-	case "filter request pending":
+	case filterPendingReason:
 		client.gated.Store(1)
-	case "replay pending":
+	case replayPendingReason:
 		client.gated.Store(1)
 		client.replaying.Store(true)
-	case "relay incompatible":
+	case relayIncompatibleReason:
 		client.incompatible.Store(true)
 	}
 }
@@ -2078,7 +2084,7 @@ func TestEchoRoundTrip(t *testing.T) {
 	awaitReady(t, client)
 	client.replaceMirror([]protocol.Subscription{subA()})
 	relay.setIntercept(func(_ int, req frame) (string, bool) {
-		if req.Type != "echo" {
+		if req.Type != echoEvent {
 			return "", false
 		}
 
@@ -2103,7 +2109,7 @@ func TestEchoRoundTrip(t *testing.T) {
 	select {
 	case event := <-got:
 		want := protocol.Event{
-			Repository: nil, Provider: "awrel", Event: "echo", Delivery: "nonce_1-ABC",
+			Repository: nil, Provider: awrelProvider, Event: echoEvent, Delivery: "nonce_1-ABC",
 			Payload: json.RawMessage(`{"echo":"nonce_1-ABC","relay_received_at":"2026-11-10T00:00:00Z"}`),
 		}
 		if !reflect.DeepEqual(event, want) {
@@ -2202,5 +2208,76 @@ func assertEchoError(t *testing.T, err error, unsupported bool, code, message st
 	rejected, ok := errors.AsType[*protocol.Error](err)
 	if !ok || rejected.Code != code || rejected.Message != message {
 		t.Fatalf("Echo = %v", err)
+	}
+}
+
+func TestGatedAwrelEventsLogWithoutCounting(t *testing.T) {
+	t.Parallel()
+
+	for _, reason := range []string{filterPendingReason, replayPendingReason, relayIncompatibleReason} {
+		for _, name := range []string{echoEvent, "self_test", "future_test"} {
+			var logs bytes.Buffer
+
+			opts := quiet()
+			opts.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+			opts.OnEvent = func(context.Context, protocol.Event) { t.Error("gated event delivered") }
+			client := New(opts)
+			setEventGate(client, reason)
+			client.gatedEvents.Store(7)
+
+			event := protocol.Event{
+				Provider: awrelProvider, Event: name, Delivery: "d1", Repository: nil, Payload: json.RawMessage(`{}`),
+			}
+			if !client.handle(t.Context(), event) {
+				t.Fatal("event ended reader")
+			}
+
+			_, _, gated := client.Status()
+			if gated != 7 {
+				t.Fatalf("%s %s gated count = %d", name, reason, gated)
+			}
+
+			var line map[string]any
+
+			err := json.Unmarshal(logs.Bytes(), &line)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			delete(line, "time")
+
+			want := map[string]any{
+				"level": "INFO", "msg": eventKey, "outcome": "gated", "delivery": "d1",
+				"provider": awrelProvider, eventKey: name, "reason": reason,
+			}
+			if !maps.Equal(line, want) {
+				t.Fatalf("log = %v, want %v", line, want)
+			}
+		}
+	}
+}
+
+func TestAwrelEventsForwardWithoutCounting(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{echoEvent, "self_test"} {
+		var got protocol.Event
+
+		opts := quiet()
+		opts.OnEvent = func(_ context.Context, event protocol.Event) { got = event }
+		client := New(opts)
+		client.gatedEvents.Store(7)
+
+		event := protocol.Event{
+			Provider: awrelProvider, Event: name, Delivery: "d1", Repository: nil, Payload: json.RawMessage(`{}`),
+		}
+		if !client.handle(t.Context(), event) {
+			t.Fatal("event ended reader")
+		}
+
+		_, _, gated := client.Status()
+		if gated != 7 || !reflect.DeepEqual(got, event) {
+			t.Fatalf("forwarded event = %+v, gated count = %d", got, gated)
+		}
 	}
 }

@@ -257,7 +257,10 @@ func (s *Server) HandleEvent(ctx context.Context, event protocol.Event) {
 	described := delivery.Describe(event)
 
 	if current.deliverer == nil {
-		s.dropped.Add(1)
+		if described.Counted() {
+			s.dropped.Add(1)
+		}
+
 		described.Log(ctx, s.logger, "dropped", "reason", "no event delivery for this client")
 
 		return
@@ -265,13 +268,19 @@ func (s *Server) HandleEvent(ctx context.Context, event protocol.Event) {
 
 	err := current.deliverer.Deliver(ctx, described)
 	if err != nil {
-		s.failed.Add(1)
+		if described.Counted() {
+			s.failed.Add(1)
+		}
+
 		described.Log(ctx, s.logger, "failed", "error", err)
 
 		return
 	}
 
-	s.delivered.Add(1)
+	if described.Counted() {
+		s.delivered.Add(1)
+	}
+
 	described.Log(ctx, s.logger, "delivered")
 }
 
@@ -471,9 +480,18 @@ func (s *Server) checkDelivery(
 		state = "connected"
 	}
 
-	message += fmt.Sprintf("\nRelay connection: %s\nRelay echo: %s\nSubscriptions: %d"+
-		"\nEvents since start: %d delivered, %d gated, %d dropped, %d failed\nPersistence: %s",
-		state, s.relayEcho(ctx, connected), count, s.delivered.Load(), gated, s.dropped.Load(), s.failed.Load(), s.persistence)
+	message += fmt.Sprintf(
+		"\nRelay connection: %s\nRelay echo: %s\nSubscriptions: %d"+
+			"\nEvents since start: %d delivered, %d gated, %d dropped, %d failed\nPersistence: %s",
+		state,
+		s.relayEcho(ctx, connected),
+		count,
+		s.delivered.Load(),
+		gated,
+		s.dropped.Load(),
+		s.failed.Load(),
+		s.persistence,
+	)
 
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: message}}}, nil, nil
 }

@@ -37,6 +37,12 @@ func Describe(event protocol.Event) Event {
 	return Event{Message: event, Action: payloadAction(event.Payload)}
 }
 
+// Counted reports whether the event belongs in the webhook traffic counts.
+// Events from awrel itself are logged but never counted.
+func (e Event) Counted() bool {
+	return e.Message.Provider != "awrel"
+}
+
 // Log records an outcome without including payload contents.
 func (e Event) Log(ctx context.Context, logger *slog.Logger, outcome string, extra ...any) {
 	attrs := []any{

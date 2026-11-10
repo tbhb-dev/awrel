@@ -445,7 +445,7 @@ func TestInitializeResult(t *testing.T) {
 		t.Errorf("protocol version = %q", result.ProtocolVersion)
 	}
 
-	if result.ServerInfo.Name != "awrel" || result.ServerInfo.Version != testVersion {
+	if result.ServerInfo.Name != serverName || result.ServerInfo.Version != testVersion {
 		t.Errorf("server info = %+v", result.ServerInfo)
 	}
 
@@ -1132,7 +1132,7 @@ type loggingRig struct {
 
 const (
 	infoLevel   = "info"
-	awrelLogger = "awrel"
+	awrelLogger = serverName
 )
 
 //nolint:staticcheck // the restore notice is an SDK logging message
@@ -1478,7 +1478,7 @@ func assertSelfTest(t *testing.T, raw json.RawMessage, text, previous string, ea
 		t.Fatalf("nonce = %q, previous = %q", nonce, previous)
 	}
 
-	wantMeta := map[string]string{"provider": "awrel", "event": "self_test", "delivery": nonce}
+	wantMeta := map[string]string{"provider": serverName, "event": "self_test", "delivery": nonce}
 	if compact {
 		wantMeta["compact"] = "true"
 	}
@@ -1536,7 +1536,8 @@ func TestCheckDeliveryPersistenceStates(t *testing.T) {
 			result, _, err := server.checkDelivery(t.Context(), nil, ListArgs{})
 			want := "This client has no event delivery: awrel does not know how to deliver events to client . " +
 				"Subscriptions are accepted but no event will arrive.\n" +
-				"Relay connection: not connected\nRelay echo: not sent, relay not connected\nSubscriptions: 0\n" + eventCountsZero + "Persistence: " + state
+				"Relay connection: not connected\nRelay echo: not sent, relay not connected\n" +
+				"Subscriptions: 0\n" + eventCountsZero + "Persistence: " + state
 
 			if err != nil || result.IsError || textOf(t, result) != want {
 				t.Fatalf("check_delivery = %+v, %v; want %q", result, err, want)
@@ -1714,5 +1715,58 @@ func TestCheckDeliveryEchoErrors(t *testing.T) {
 				t.Fatalf("calls = %v", calls)
 			}
 		})
+	}
+}
+
+func TestAwrelEventsLogWithoutCounting(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"echo", "self_test", "future_test"} {
+		for _, outcome := range []string{droppedOutcome, failedOutcome, deliveredOutcome} {
+			t.Run(name+"/"+outcome, func(t *testing.T) {
+				t.Parallel()
+
+				assertAwrelEventOutcome(t, name, outcome)
+			})
+		}
+	}
+}
+
+func assertAwrelEventOutcome(t *testing.T, name, outcome string) {
+	t.Helper()
+
+	logs := &syncBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}}
+	server := serverWithLogs(logs)
+
+	switch outcome {
+	case failedOutcome:
+		server.deliverer = failingDeliverer{}
+	case deliveredOutcome:
+		server.deliverer = successfulDeliverer{}
+	}
+
+	server.delivered.Store(2)
+	server.dropped.Store(3)
+	server.failed.Store(4)
+
+	event := testEvent()
+	event.Provider = serverName
+	event.Event = name
+	server.HandleEvent(t.Context(), event)
+
+	if server.delivered.Load() != 2 || server.dropped.Load() != 3 || server.failed.Load() != 4 {
+		t.Fatalf("%s %s changed counts: %d delivered, %d dropped, %d failed",
+			name, outcome, server.delivered.Load(), server.dropped.Load(), server.failed.Load())
+	}
+
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("%s %s log lines = %v", name, outcome, lines)
+	}
+
+	for _, attr := range []string{"provider=awrel", "event=" + name, "outcome=" + outcome, "delivery=d1"} {
+		if !strings.Contains(lines[0], attr) {
+			t.Fatalf("missing %s in %s", attr, lines[0])
+		}
 	}
 }

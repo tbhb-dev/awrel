@@ -440,3 +440,25 @@ func TestEventLog(t *testing.T) {
 		}
 	}
 }
+
+func TestEventCounted(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		provider string
+		want     bool
+	}{
+		{"awrel", false},
+		{githubProvider, true},
+		{"other", true},
+	} {
+		for _, name := range []string{"self_test", "echo", "push"} {
+			event := newEvent(name, "d1", "", json.RawMessage(`{}`))
+			event.Provider = test.provider
+
+			if got := Describe(event).Counted(); got != test.want {
+				t.Errorf("Counted(%s, %s) = %t", test.provider, name, got)
+			}
+		}
+	}
+}

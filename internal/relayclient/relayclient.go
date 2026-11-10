@@ -569,24 +569,32 @@ func (c *Client) handle(ctx context.Context, msg protocol.Message) bool {
 		default:
 		}
 	case protocol.Event:
-		if c.gated.Load() == 0 && !c.incompatible.Load() {
-			c.opts.OnEvent(ctx, message)
-		} else {
-			reason := "filter request pending"
-			if c.incompatible.Load() {
-				reason = "relay incompatible"
-			} else if c.replaying.Load() {
-				reason = "replay pending"
-			}
-
-			c.gatedEvents.Add(1)
-			delivery.Describe(message).Log(ctx, c.opts.Logger, "gated", "reason", reason)
-		}
+		c.handleEvent(ctx, message)
 	default:
 		c.opts.Logger.DebugContext(ctx, "ignored relay message", slog.Any("message", message))
 	}
 
 	return true
+}
+
+func (c *Client) handleEvent(ctx context.Context, message protocol.Event) {
+	if c.gated.Load() == 0 && !c.incompatible.Load() {
+		c.opts.OnEvent(ctx, message)
+	} else {
+		reason := "filter request pending"
+		if c.incompatible.Load() {
+			reason = "relay incompatible"
+		} else if c.replaying.Load() {
+			reason = "replay pending"
+		}
+
+		described := delivery.Describe(message)
+		if described.Counted() {
+			c.gatedEvents.Add(1)
+		}
+
+		described.Log(ctx, c.opts.Logger, "gated", "reason", reason)
+	}
 }
 
 // route hands a reply to the request waiting for requestID.
