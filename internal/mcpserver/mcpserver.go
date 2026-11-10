@@ -50,12 +50,17 @@ const Instructions = "awrel relays webhook events into this session. " +
 	"and act only on what the user asked you to watch for. " +
 	"Events sent while the relay connection is down are lost and never replayed, " +
 	"so check current state with the provider's API or CLI before acting. " +
-	"Subscriptions last only for this session.\n\n" +
+	"Subscriptions persist across restarts when a session key is available, " +
+	"and the server tells you when it restores some. Persistence is not available on Windows. " +
+	"A session without a key keeps session-only subscriptions.\n\n" +
 	"After a restart or reconnect, call check_delivery and confirm its event arrives."
 
 // channelCapability is the experimental capability that makes Claude Code
 // treat this server as a channel.
-const channelCapability = "claude/channel"
+const (
+	channelCapability = "claude/channel"
+	serverName        = "awrel"
+)
 
 // errNoConnection means Notify ran before the transport connected.
 var errNoConnection = errors.New("no MCP connection")
@@ -78,9 +83,11 @@ type Relay interface {
 
 // Options configure a Server.
 type Options struct {
-	Logger  *slog.Logger
-	Relay   Relay
-	Version string
+	// Persistence describes the outcome of opening the session Store.
+	Persistence string
+	Logger      *slog.Logger
+	Relay       Relay
+	Version     string
 	// Compact delivers events with compact payloads.
 	Compact bool
 }
@@ -145,30 +152,45 @@ type Server struct {
 	relay     Relay
 	deliverer delivery.Deliverer
 	transport *notifyingTransport
-	client    string
-	mu        sync.Mutex
-	compact   bool
+	// session is the client's session, set when it has initialized.
+	session     *mcp.ServerSession
+	client      string
+	persistence string
+	// notice is the session notice that the agent hasn't heard yet.
+	notice  string
+	mu      sync.Mutex
+	compact bool
 }
 
 // New returns a Server that drives opts.Relay.
 func New(opts Options) *Server {
 	server := &Server{
-		server:    nil,
-		logger:    opts.Logger,
-		relay:     opts.Relay,
-		deliverer: nil,
-		transport: nil,
-		client:    "",
-		mu:        sync.Mutex{},
-		compact:   opts.Compact,
+		server:      nil,
+		logger:      opts.Logger,
+		relay:       opts.Relay,
+		deliverer:   nil,
+		transport:   nil,
+		session:     nil,
+		client:      "",
+		persistence: opts.Persistence,
+		notice:      "",
+		mu:          sync.Mutex{},
+		compact:     opts.Compact,
+	}
+
+	if opts.Persistence == "unavailable on this platform" {
+		server.notice = "persistence is unavailable on this platform; subscriptions last only for this session"
 	}
 
 	server.server = mcp.NewServer(
-		&mcp.Implementation{Name: "awrel", Version: opts.Version},
+		&mcp.Implementation{Name: serverName, Version: opts.Version},
 		&mcp.ServerOptions{
 			Instructions: Instructions,
 			Capabilities: &mcp.ServerCapabilities{
 				Experimental: map[string]any{channelCapability: map[string]any{}},
+				// Setting Capabilities drops the SDK's default logging
+				// capability, which the restore notice needs.
+				Logging: &mcp.LoggingCapabilities{}, //nolint:staticcheck // the notice needs the capability
 			},
 			InitializedHandler: server.initialized,
 			// The newest protocol version has clients call server/discover and
@@ -237,6 +259,26 @@ func (s *Server) HandleEvent(ctx context.Context, event protocol.Event) {
 	}
 }
 
+// Restored records that the relay client restored count subscriptions from the
+// previous run. The server sends one logging notification about it, at once
+// when the client has initialized, else right after it does.
+func (s *Server) Restored(ctx context.Context, count int) {
+	if count == 0 {
+		return
+	}
+
+	noun := "subscriptions"
+	if count == 1 {
+		noun = "subscription"
+	}
+
+	s.mu.Lock()
+	s.notice = fmt.Sprintf("restored %d %s from the previous run", count, noun)
+	s.mu.Unlock()
+
+	s.announceNotice(ctx)
+}
+
 // initialized runs when the client finishes the handshake. It picks the
 // delivery adapter from the client's name.
 func (s *Server) initialized(ctx context.Context, req *mcp.InitializedRequest) {
@@ -247,18 +289,47 @@ func (s *Server) initialized(ctx context.Context, req *mcp.InitializedRequest) {
 		name = info.Name
 	}
 
-	s.adopt(name)
+	s.adopt(name, req.Session)
 
 	s.logger.InfoContext(ctx, "client initialized", "name", name)
+	s.announceNotice(ctx)
 }
 
-// adopt records the client's name and gives a client that can receive channel
-// notifications its adapter.
-func (s *Server) adopt(name string) {
+// announceNotice sends a session notice once to an initialized client.
+// The SDK sends it only if the client has set a logging level.
+func (s *Server) announceNotice(ctx context.Context) {
+	s.mu.Lock()
+	session, notice := s.session, s.notice
+
+	if session == nil || notice == "" {
+		s.mu.Unlock()
+
+		return
+	}
+
+	s.notice = ""
+	s.mu.Unlock()
+
+	//nolint:staticcheck // SDK logging is the notification the design calls for
+	err := session.Log(ctx, &mcp.LoggingMessageParams{
+		Level:  "info",
+		Logger: serverName,
+		Data:   notice,
+	})
+	if err != nil {
+		s.logger.WarnContext(ctx, "session notice not sent", "error", err)
+	}
+}
+
+// adopt records the client's name and session and gives a client that can
+// receive channel notifications its adapter.
+func (s *Server) adopt(name string, session *mcp.ServerSession) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.client = name
+	s.session = session
+
 	if name == delivery.ClaudeCodeClient {
 		s.deliverer = delivery.NewChannel(s.transport, delivery.Options{Compact: s.compact})
 	}
@@ -352,7 +423,7 @@ func (s *Server) checkDelivery(
 	} else {
 		nonce := rand.Text()
 		event := protocol.Event{
-			Provider:   "awrel",
+			Provider:   serverName,
 			Event:      "self_test",
 			Delivery:   nonce,
 			Repository: nil,
@@ -379,7 +450,7 @@ func (s *Server) checkDelivery(
 		state = "connected"
 	}
 
-	message += fmt.Sprintf("\nRelay connection: %s\nSubscriptions: %d", state, count)
+	message += fmt.Sprintf("\nRelay connection: %s\nSubscriptions: %d\nPersistence: %s", state, count, s.persistence)
 
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: message}}}, nil, nil
 }

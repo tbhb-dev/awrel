@@ -102,6 +102,7 @@ func startMCP(
 	t.Helper()
 
 	root := &cobra.Command{Use: "awrel", SilenceUsage: true}
+	addSessionFlag(root)
 	root.AddCommand(newMCPCmdWithTimeout(stdin, getenv, timeout))
 
 	ctx, cancel := context.WithCancel(t.Context())

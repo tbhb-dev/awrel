@@ -2,9 +2,10 @@
 // Copyright Tony Burns
 
 // Package relayclient keeps one subscription session with the relay alive. It
-// dials on the first request and redials after a loss with randomized
-// exponential backoff. After a reconnect it resubscribes. Pings detect a dead
-// socket, and an ID ties each reply to its request.
+// dials on the first request, or at once when it starts with subscriptions to
+// restore, and redials after a loss with randomized exponential backoff. After
+// a reconnect it resubscribes. Pings detect a dead socket, and an ID ties each
+// reply to its request.
 package relayclient
 
 import (
@@ -30,10 +31,11 @@ const (
 	defaultPongTimeout    = 10 * time.Second
 	defaultRequestTimeout = 10 * time.Second
 	// backoffFactor is the growth of the retry delay per attempt.
-	backoffFactor    = 2
-	requestList      = "list"
-	requestSubscribe = "subscribe"
-	maxMessageBytes  = 4096
+	backoffFactor      = 2
+	requestList        = "list"
+	requestSubscribe   = "subscribe"
+	requestUnsubscribe = "unsubscribe"
+	maxMessageBytes    = 4096
 )
 
 var (
@@ -66,16 +68,41 @@ func (e *NotConnectedError) Unwrap() error {
 	return e.Cause
 }
 
+// Store saves the subscriptions that the relay acknowledged, so that the next
+// process of the session can restore them. Each call applies one change.
+type Store interface {
+	Add(sub protocol.Subscription) error
+	Remove(sub protocol.Subscription) error
+	// Touch resets the age of the saved file. A Store without a file does nothing.
+	Touch()
+}
+
+// nopStore is the Store of a client that saves nothing.
+type nopStore struct{}
+
+func (nopStore) Add(protocol.Subscription) error    { return nil }
+func (nopStore) Remove(protocol.Subscription) error { return nil }
+func (nopStore) Touch()                             {}
+
 // Options configures a Client. Dial, OnEvent and Logger are required; a zero
-// duration or a nil Rand selects the default.
+// duration, a nil Rand, a nil Store or a nil OnRestored selects the default.
 type Options struct {
 	// Dial opens a connection to the relay.
 	Dial func(context.Context) (*transport.Conn, error)
 	// OnEvent receives each event, in order, on the reader goroutine.
 	OnEvent func(context.Context, protocol.Event)
 	Logger  *slog.Logger
+	// OnRestored receives the number of subscriptions the mirror holds once the
+	// first replay of Initial succeeds. It doesn't run when that number is zero.
+	OnRestored func(ctx context.Context, count int)
 	// Rand returns a float in [0, 1) for backoff jitter. Nil means rand.Float64.
 	Rand func() float64
+	// Store saves each acknowledged change. Nil saves nothing. The restore
+	// replay never calls it.
+	Store Store
+	// Initial seeds the mirror. A client with a seed dials at once instead of
+	// waiting for the first request.
+	Initial []protocol.Subscription
 	// MinBackoff is the first retry delay before jitter. Default one second.
 	MinBackoff time.Duration
 	// MaxBackoff caps the retry delay before jitter. Default 60 seconds.
@@ -125,6 +152,8 @@ type Client struct {
 	replaying atomic.Bool
 	// gated counts filter requests and replay while their echoes are pending.
 	gated atomic.Int32
+	// restoring is set from a seeded start until OnRestored has run.
+	restoring atomic.Bool
 }
 
 // New returns a Client. It starts nothing.
@@ -139,7 +168,15 @@ func New(opts Options) *Client {
 		opts.Rand = rand.Float64
 	}
 
-	return &Client{
+	if opts.Store == nil {
+		opts.Store = nopStore{}
+	}
+
+	if opts.OnRestored == nil {
+		opts.OnRestored = func(context.Context, int) {}
+	}
+
+	client := &Client{
 		opts:         opts,
 		after:        time.After,
 		kick:         newSignal[struct{}](),
@@ -149,13 +186,22 @@ func New(opts Options) *Client {
 		ready:        make(chan struct{}),
 		cur:          nil,
 		lastErr:      nil,
-		mirror:       nil,
+		mirror:       cloneSubscriptions(opts.Initial),
 		mu:           sync.Mutex{},
 		nextID:       atomic.Uint64{},
 		incompatible: atomic.Bool{},
 		gated:        atomic.Int32{},
 		replaying:    atomic.Bool{},
+		restoring:    atomic.Bool{},
 	}
+
+	// A seed makes the client dial at once. The signal waits for Run.
+	if len(opts.Initial) > 0 {
+		client.restoring.Store(true)
+		client.kickDial()
+	}
+
+	return client
 }
 
 // newSignal returns a channel with room for one pending value.
@@ -286,7 +332,9 @@ func (c *Client) session(ctx context.Context) bool {
 		return false
 	}
 
+	c.opts.Store.Touch()
 	c.markReady(sess)
+	c.announceRestored(ctx)
 
 	var keepers sync.WaitGroup
 
@@ -307,6 +355,19 @@ func (c *Client) session(ctx context.Context) bool {
 	c.closeConn(ctx, conn)
 
 	return true
+}
+
+// announceRestored tells OnRestored, once, how many subscriptions the replay
+// of the seed left in the mirror.
+func (c *Client) announceRestored(ctx context.Context) {
+	if !c.restoring.CompareAndSwap(true, false) {
+		return
+	}
+
+	count := len(c.snapshot())
+	if count > 0 {
+		c.opts.OnRestored(ctx, count)
+	}
 }
 
 // closeConn closes conn and logs a failure at debug level, since the
@@ -352,8 +413,10 @@ func (c *Client) kickDial() {
 	}
 }
 
-// resubscribe replays the mirror on a new session, dropping unfiltered entries
-// that the relay rejects. Rejected filters preserve the mirror and stop retries.
+// resubscribe replays the mirror on a new session. An entry that the relay
+// rejects, filtered or not, is dropped from the mirror and the store, so that
+// no later start replays it. The missing filter echo, not a rejection, marks a
+// relay too old for filters.
 func (c *Client) resubscribe(ctx context.Context, sess *session) error {
 	for _, sub := range c.snapshot() {
 		reqCtx, cancel := context.WithTimeout(ctx, c.opts.RequestTimeout)
@@ -363,14 +426,12 @@ func (c *Client) resubscribe(ctx context.Context, sess *session) error {
 		cancel()
 
 		if relayErr, ok := errors.AsType[*protocol.Error](err); ok {
-			if sub.HasFilters() {
-				c.incompatible.Store(true)
-
-				return ErrRelayTooOld
-			}
-
-			c.opts.Logger.WarnContext(ctx, "relay rejected a resubscribe", slog.Any("error", relayErr))
+			c.opts.Logger.WarnContext(
+				ctx, "relay rejected a restored subscription, dropping it",
+				slog.Any("subscription", sub), slog.Any("error", relayErr),
+			)
 			c.dropFromMirror(sub)
+			c.persist(ctx, requestUnsubscribe, sub)
 
 			continue
 		}
@@ -699,7 +760,28 @@ func (c *Client) subscriptionCall(
 		return nil, err
 	}
 
-	return c.subscriptionTrip(ctx, sess, kind, sub.Canonical())
+	sub = sub.Canonical()
+
+	subs, err := c.subscriptionTrip(ctx, sess, kind, sub)
+	if err == nil {
+		c.persist(ctx, kind, sub)
+	}
+
+	return subs, err
+}
+
+// persist saves the change that the relay acknowledged. A failure logs a
+// warning and leaves the call successful.
+func (c *Client) persist(ctx context.Context, kind string, sub protocol.Subscription) {
+	save := c.opts.Store.Remove
+	if kind == requestSubscribe {
+		save = c.opts.Store.Add
+	}
+
+	err := save(sub)
+	if err != nil {
+		c.opts.Logger.WarnContext(ctx, "save the subscription", slog.Any("error", err))
+	}
 }
 
 func (c *Client) subscriptionTrip(

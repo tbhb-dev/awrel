@@ -47,6 +47,32 @@ A payload over 64 KiB reaches the agent as a short note, with the attribute `tru
 
 By default the server delivers compact payloads, which reduce each payload to a selection of its fields. A compact body has no API URLs, only the login and type for each user, and can still include third-party text such as issue and comment bodies and commit messages. Events arrive with the attribute `compact` set to `true`, and the agent fetches details with `gh`. Compaction runs before the 64 KiB check, so most large pushes arrive. Pass `--format full` or set `AWREL_FORMAT=full` to get the whole payload. Either overrides the default of `compact`, and the flag takes precedence over the variable. See the documentation of the `internal/compact` package for the rules.
 
+## Subscriptions across restarts
+
+Subscriptions persist across restarts when a session key is available. A restarted server with the same key restores them from disk.
+
+On Windows, persistence is off and subscriptions last only for the session.
+
+Key lookup runs in this order:
+
+1. The `--session-id` flag.
+2. The `AWREL_SESSION_ID` environment variable.
+3. The session variable of a known agent harness, which the harness sets in the environment of its MCP servers.
+
+A session without a key keeps session-only behavior: the server saves and restores nothing and connects to the relay on the first tool call.
+
+Each key maps to the file `$XDG_STATE_HOME/awrel/sessions/<sha256 of the key>.json`, under `~/.local/state` when `XDG_STATE_HOME` is unset or empty. Directory mode is `0700` and file mode is `0600`. Inside are the relay endpoint and the subscriptions in the form that `list_subscriptions` returns. Loading skips a file with another version or endpoint, and it skips invalid JSON with a warning on stderr.
+
+If the file has at least one subscription for the current endpoint, the server connects to the relay at once and replays them. Events then arrive before any tool call, and `list_subscriptions` shows restored entries like any others. Once the replay succeeds, one MCP logging notification (`notifications/message`, level `info`) tells the agent, such as `restored 3 subscriptions from the previous run`. Per the MCP SDK, only a client that has set a log level with `logging/setLevel` receives logging notifications.
+
+Each acknowledged `subscribe` or `unsubscribe` triggers a write. A failed write logs a warning to stderr, and the tool call still succeeds. Processes that share a key, such as an old process that keeps running after a reconnect, don't overwrite each other: a write locks and rereads the file, then applies only its own change. Restoring writes only to remove a subscription that the relay refuses.
+
+The server drops a subscription that the relay refuses at restore, with a warning and a removal from the file, and the rest still restore.
+
+Startup deletes files idle for 14 days. A session's own start and each reconnect reset its file's age.
+
+Session files that nobody touched for 14 days disappear at the next startup. Set `AWREL_PERSIST=0` to turn off loading, writing, and pruning.
+
 ## Pick up a new release
 
 After the pinned version in the MCP configuration changes, restart the Claude Code session. Use `/restart`, or quit Claude Code and start it again. Don't rely on `/mcp` reconnect for a version change.
@@ -55,7 +81,7 @@ This is a known Claude Code issue, observed with Claude Code 2.1.319 on macOS. A
 
 To check, run `lsof -a -p <old pid> -d 0,1` to see the standard input and output sockets of the old process, and `lsof -U` to see that the Claude Code process still holds their peer ends. `lsof -a -p <old pid> -i` shows its relay connection still `ESTABLISHED`. A restart closes every pipe, and both processes exit.
 
-Subscriptions last only for the server process, so they're empty after the restart. Subscribe again.
+With a session key, the new server process restores the saved subscriptions. See [Subscriptions across restarts](#subscriptions-across-restarts). Without a key, the subscriptions are empty after the restart, so subscribe again.
 
 ## Subscription filters
 

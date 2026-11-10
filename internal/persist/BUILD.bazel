@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Tony Burns
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@tbhb_rules//repo:defs.bzl", "repo_files")
+
+repo_files()
+
+go_library(
+    name = "persist",
+    srcs = [
+        "lock_other.go",
+        "lock_unix.go",
+        "persist.go",
+    ],
+    importpath = "go.tbhb.dev/awrel/internal/persist",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/protocol",
+    ],
+)
+
+go_test(
+    name = "persist_test",
+    srcs = [
+        "lock_other_internal_test.go",
+        "lock_unix_internal_test.go",
+        "persist_internal_test.go",
+        "persist_windows_internal_test.go",
+        "platform_internal_test.go",
+    ],
+    embed = [":persist"],
+    # The whole-module Go checks in the root package take the tests too.
+    visibility = ["//:__pkg__"],
+    deps = select({
+        "@rules_go//go/platform:aix": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:android": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:js": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:linux": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:osx": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:qnx": [
+            "//internal/protocol",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "//internal/protocol",
+        ],
+        "//conditions:default": [],
+    }),
+)

@@ -21,6 +21,7 @@ go_test(
     name = "relayclient_test",
     srcs = [
         "fakerelay_internal_test.go",
+        "persistence_internal_test.go",
         "relayclient_internal_test.go",
     ],
     embed = [":relayclient"],
