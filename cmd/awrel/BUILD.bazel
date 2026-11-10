@@ -46,6 +46,7 @@ go_test(
         "//internal/mcpserver",
         "//internal/persist",
         "//internal/protocol",
+        "//internal/relayclient",
         "@com_github_coder_websocket//:websocket",
         "@com_github_spf13_cobra//:cobra",
     ],
