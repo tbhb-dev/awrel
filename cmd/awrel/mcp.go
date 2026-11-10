@@ -146,6 +146,10 @@ func (r unconnectedRelay) Unsubscribe(context.Context, protocol.Subscription) ([
 	return nil, r.fail()
 }
 
+func (r unconnectedRelay) Echo(context.Context, string) error {
+	return r.fail()
+}
+
 func (r unconnectedRelay) List(context.Context) ([]protocol.Subscription, error) {
 	return nil, r.fail()
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -1964,5 +1965,143 @@ func TestStatus(t *testing.T) {
 
 	if connected, count := client.Status(); connected || count != 2 {
 		t.Fatalf("disconnected mirror = %t, %d", connected, count)
+	}
+}
+
+func TestEchoRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	relay := newFakeRelay(t)
+	got := make(chan protocol.Event, 1)
+	opts := quiet()
+	opts.OnEvent = func(_ context.Context, event protocol.Event) { got <- event }
+	client, _ := relay.start(t, opts)
+	awaitReady(t, client)
+	client.replaceMirror([]protocol.Subscription{subA()})
+	relay.setIntercept(func(_ int, req frame) (string, bool) {
+		if req.Type != "echo" {
+			return "", false
+		}
+
+		if req.Nonce != "nonce_1-ABC" || req.ID == "" {
+			t.Errorf("request = %+v", req)
+		}
+
+		relay.push(
+			t,
+			`{"type":"event","provider":"awrel","event":"echo","delivery":"nonce_1-ABC",`+
+				`"payload":{"echo":"nonce_1-ABC","relay_received_at":"2026-11-10T00:00:00Z"}}`,
+		)
+
+		return `{"type":"echoed","id":"` + req.ID + `"}`, true
+	})
+
+	err := client.Echo(t.Context(), "nonce_1-ABC")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case event := <-got:
+		want := protocol.Event{
+			Repository: nil, Provider: "awrel", Event: "echo", Delivery: "nonce_1-ABC",
+			Payload: json.RawMessage(`{"echo":"nonce_1-ABC","relay_received_at":"2026-11-10T00:00:00Z"}`),
+		}
+		if !reflect.DeepEqual(event, want) {
+			t.Fatalf("event = %+v, want %+v", event, want)
+		}
+	default:
+		t.Fatal("echo returned before OnEvent")
+	}
+
+	if !reflect.DeepEqual(client.snapshot(), []protocol.Subscription{subA()}) {
+		t.Fatal("echo changed mirror")
+	}
+}
+
+func TestEchoErrors(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		code        string
+		message     string
+		unsupported bool
+	}{
+		{"new client old relay", "bad_message", "unknown message type", true},
+		{"different code", "limit", "unknown message type", false},
+		{"different message", "bad_message", "invalid nonce", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			relay := newFakeRelay(t)
+			relay.setIntercept(func(_ int, req frame) (string, bool) {
+				return fmt.Sprintf(
+					`{"type":"error","id":%q,"code":%q,"message":%q}`,
+					req.ID,
+					test.code,
+					test.message,
+				), true
+			})
+			client, _ := relay.start(t, quiet())
+			awaitReady(t, client)
+			err := client.Echo(t.Context(), "n")
+			assertEchoError(t, err, test.unsupported, test.code, test.message)
+
+			if connected, _ := client.Status(); !connected {
+				t.Fatal("echo error disconnected client")
+			}
+		})
+	}
+}
+
+func TestEchoTimeout(t *testing.T) {
+	t.Parallel()
+
+	relay := newFakeRelay(t)
+	relay.setIntercept(func(_ int, _ frame) (string, bool) { return "", true })
+
+	opts := quiet()
+	opts.RequestTimeout = 10 * tick
+	client, _ := relay.start(t, opts)
+	awaitReady(t, client)
+
+	started := time.Now()
+	err := client.Echo(t.Context(), "n")
+
+	if !errors.Is(err, ErrNoAnswer) || time.Since(started) < opts.RequestTimeout {
+		t.Fatalf("Echo = %v, elapsed %s", err, time.Since(started))
+	}
+}
+
+func TestEchoNotConnected(t *testing.T) {
+	t.Parallel()
+
+	opts := quiet()
+	opts.RequestTimeout = tick
+	client := New(opts)
+	err := client.Echo(t.Context(), "n")
+
+	_, disconnected := errors.AsType[*NotConnectedError](err)
+	if !disconnected {
+		t.Fatalf("Echo = %v", err)
+	}
+}
+
+func assertEchoError(t *testing.T, err error, unsupported bool, code, message string) {
+	t.Helper()
+
+	if unsupported {
+		if !errors.Is(err, ErrEchoUnsupported) {
+			t.Fatalf("Echo = %v", err)
+		}
+
+		return
+	}
+
+	rejected, ok := errors.AsType[*protocol.Error](err)
+	if !ok || rejected.Code != code || rejected.Message != message {
+		t.Fatalf("Echo = %v", err)
 	}
 }

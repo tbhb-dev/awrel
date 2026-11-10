@@ -61,6 +61,7 @@ var errDial = errors.New("dial failed")
 type frame struct {
 	Subscription        *protocol.Subscription `json:"subscription"`
 	Type                string                 `json:"type"`
+	Nonce               string                 `json:"nonce"`
 	ID                  string                 `json:"id"`
 	SubscriptionFilters bool                   `json:"subscription_filters"` //nolint:tagliatelle // relay wire field
 }

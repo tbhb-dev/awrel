@@ -42,6 +42,8 @@ func TestEncode(t *testing.T) {
 			`{"subscription":{"provider":"github","event":"pull_request","repository":"o/r"},"type":"unsubscribe","id":"3"}`,
 			EncodeUnsubscribe("3", full),
 		},
+		{"echo", `{"type":"echo","id":"e","nonce":"n_1-ABC"}`, EncodeEcho("e", "n_1-ABC")},
+		{"echo escaping", `{"type":"echo","id":"a\"b","nonce":"x\ny"}`, EncodeEcho("a\"b", "x\ny")},
 		{"list", `{"type":"list","id":"4"}`, EncodeList("4")},
 		{"escaping", `{"type":"list","id":"a\"b\n"}`, EncodeList("a\"b\n")},
 	}
@@ -108,6 +110,7 @@ func TestDecode(t *testing.T) {
 			"error without id",
 			`{"type":"error","code":"bad_message","message":"no id"}`,
 		},
+		{Echoed{ID: "e"}, "echoed", `{"type":"echoed","id":"e"}`},
 		{Pong{}, "pong", `{"type":"pong"}`},
 		{
 			Event{
@@ -157,6 +160,9 @@ func TestDecodeErrors(t *testing.T) {
 		wantErr string
 		missing bool
 	}{
+		{"echoed ill-typed", `{"type":"echoed","id":3}`, "decode echoed", false},
+		{"echoed missing id", `{"type":"echoed"}`, `echoed: missing field "id"`, true},
+		{"echoed null id", `{"type":"echoed","id":null}`, `echoed: missing field "id"`, true},
 		{"invalid json", `{`, decodeMessage, false},
 		{"not an object", `[]`, decodeMessage, false},
 		{"type ill-typed", `{"type":1}`, decodeMessage, false},

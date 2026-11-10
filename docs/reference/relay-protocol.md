@@ -2,13 +2,12 @@
 description: The messages that the awrel server and the relay Durable Object exchange over the /connect WebSocket.
 generated:
   - role: generated
-    harness: claude-code:2.1.319
-    model: anthropic:claude-sonnet-5-5
-    effort: medium
-    surface: cli
-    session: sha-256-64:dc0c7bb9a6fc4839
-    subagent: sha-256-64:95a8c6deb0220742
-    at: "2026-11-08T03:43:57Z"
+    harness: codex:0.164.0
+    model: openai:gpt-6.1-sol
+    effort: high
+    surface: exec
+    session: sha-256-64:38c02a9b47a51f7f
+    at: "2026-11-10T06:52:17Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -74,9 +73,10 @@ Filters, including JSON keys, list separators, and escapes, count toward the can
 | `{"type":"subscribe","id":ID,"subscription":{...}}` | Add the subscription. Adding one already present succeeds and leaves the list unchanged. |
 | `{"type":"unsubscribe","id":ID,"subscription":{...}}` | Remove the subscription. An absent subscription gets a `not_subscribed` reply. |
 | `{"type":"list","id":ID}` | Report the current subscriptions. |
+| `{"type":"echo","id":ID,"nonce":NONCE}` | Send an echo event back on this socket, then acknowledge it. |
 | `{"type":"ping"}` | Keepalive, exactly these 15 bytes. |
 
-Clients choose each `id`, a string of 1 to 64 characters, and the reply echoes it.
+Clients choose each `id`, a string of 1 to 64 characters, and the reply echoes it. An echo `nonce` must match `^[A-Za-z0-9_-]{1,64}$`. An invalid nonce gets `bad_message` with the request id. Echo requests use the same 4096-byte message limit.
 
 A list, subscribe, or unsubscribe request with top-level `"subscription_filters":true` receives `"subscription_filters":true` on its successful `subscriptions` reply. Other values or an omitted flag don't add the echo. Subscriptions replies include canonical filter fields. Copy an entry into an unsubscribe request to remove that exact subscription. The flag is outside subscription identity. A client can probe support with `{"type":"list","id":"probe","subscription_filters":true}` before changing subscriptions, and check both the capability echo and the exact canonical subscription in a subscribe reply.
 
@@ -86,14 +86,34 @@ A list, subscribe, or unsubscribe request with top-level `"subscription_filters"
 | --- | --- |
 | `{"type":"subscriptions","id":ID,"subscriptions":[{...}]}` | Success reply to subscribe, unsubscribe or list, with the full list after the change. |
 | `{"type":"error","id":ID or null,"code":string,"message":string}` | Failure reply. `id` is null when the message had no readable id. |
+| `{"type":"echoed","id":ID}` | Reply to echo, sent after its event frame on the same socket. |
 | `{"type":"pong"}` | Reply to ping, exactly these 15 bytes. |
 | `{"type":"event","provider":string,"event":string,"delivery":string,"repository":string or null,"payload":any}` | A webhook event that matched at least one subscription. A socket gets it once, whatever the number of matches. |
 
+### Echo
+
+An echo request sends these frames in order, only to the requesting socket:
+
+```json
+{"type":"event","provider":"awrel","event":"echo","delivery":"NONCE","payload":{"echo":"NONCE","relay_received_at":"2026-11-10T00:00:00.000Z"}}
+{"type":"echoed","id":"ID"}
+```
+
+The echo event never passes through subscription matching. It goes directly to the requesting socket.
+
+Echo uses the same serialization as a published event, with no repository field. Its delivery id and payload echo are the request nonce. `relay_received_at` follows Request for Comments (RFC) 3339 in Coordinated Universal Time (UTC). Echo leaves subscriptions unchanged. Receiving `echoed` means the event frame has already arrived on that WebSocket. The session must still confirm delivery of the event.
+
+An older relay answers echo with `{"type":"error","id":"ID","code":"bad_message","message":"unknown message type"}`. The client reports that the relay doesn't support echo yet and keeps the connection.
+
+### Errors
+
 Error codes are `bad_message` (not JSON, unknown `type`, missing or ill-typed envelope or base subscription field), `bad_subscription` (a field fails the subscription patterns, a GitHub subscribe lacks `event` or `repository`, or a filter has an invalid type, value, provider, event, or incomplete pair), `not_subscribed`, and `limit` (the change would push the attachment past its budget). An error leaves the subscriptions unchanged.
 
-A ping frame must be exactly the 15 bytes `{"type":"ping"}` to get the automatic response. Any other frame that resembles a ping, such as one with spaces or extra fields, goes to the Durable Object as a normal message and gets `bad_message`. Ping never wakes the Durable Object, because `setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}'))` answers it. The Durable Object rejects a change whose attachment JSON exceeds 12,288 UTF-8 bytes, under the 16,384-byte `serializeAttachment` limit, and treats a throw from `serializeAttachment` as `limit`.
-
 Clients ignore message types they don't know. For a client message type the server doesn't know, the reply is `bad_message`.
+
+### Ping
+
+A ping frame must be exactly the 15 bytes `{"type":"ping"}` to get the automatic response. Any other frame that resembles a ping, such as one with spaces or extra fields, goes to the Durable Object as a normal message and gets `bad_message`. Ping never wakes the Durable Object, because `setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}'))` answers it. The Durable Object rejects a change whose attachment JSON exceeds 12,288 UTF-8 bytes, under the 16,384-byte `serializeAttachment` limit, and treats a throw from `serializeAttachment` as `limit`.
 
 ## Reconnecting
 
