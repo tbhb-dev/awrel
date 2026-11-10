@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"go.tbhb.dev/awrel/internal/buildmeta"
+	"go.tbhb.dev/awrel/internal/logfile"
 	"go.tbhb.dev/awrel/internal/mcpserver"
 	"go.tbhb.dev/awrel/internal/persist"
 	"go.tbhb.dev/awrel/internal/protocol"
@@ -233,7 +234,10 @@ func serveMCP(
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	logger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil))
+	writer, closeLog, logPath := logfile.Open(sessionKey, getenv, cmd.ErrOrStderr(), time.Now())
+	defer closeLog()
+
+	logger := slog.New(slog.NewTextHandler(writer, nil))
 
 	var server *mcpserver.Server
 
@@ -258,6 +262,7 @@ func serveMCP(
 	)
 	server = mcpserver.New(mcpserver.Options{
 		Persistence: persistence,
+		LogFile:     logPath,
 		Logger:      logger,
 		Relay:       relay,
 		Version:     buildmeta.Get().Version,

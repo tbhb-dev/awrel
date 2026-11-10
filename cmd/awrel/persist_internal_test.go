@@ -141,7 +141,7 @@ func answer(ctx context.Context, conn *websocket.Conn, requestID string, list []
 // pushEvent sends an event once the test closes push.
 func (r *sessionRelay) pushEvent(ctx context.Context, conn *websocket.Conn) {
 	const event = `{"type":"event","provider":"github","event":"issue_comment","delivery":"d1",` +
-		`"repository":"o/r","payload":{"action":"created"}}`
+		`"repository":"o/r","payload":{"action":"created","body":"` + payloadMarker + `"}}`
 
 	<-r.push
 
@@ -206,7 +206,7 @@ func TestNoKeyKeepsDialOnFirstCall(t *testing.T) {
 		t.Errorf("exit: %v", err)
 	}
 
-	if exists(filepath.Join(state, "awrel")) {
+	if exists(filepath.Join(state, "awrel", "sessions")) {
 		t.Error("a session without a key touched the state directory")
 	}
 }

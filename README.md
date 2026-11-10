@@ -77,9 +77,15 @@ Session files that nobody touched for 14 days disappear at the next startup. Set
 
 When a ready relay connection drops, the server sends a `warning` notice event, followed on recovery by an `info` notice with the outage window and a reminder to check current state with the provider's API or command-line tool. The relay loses events sent during that window and never replays them, and these events come from awrel itself with provider `awrel` and event `notice`. Clients without event delivery receive MCP logging notices when they set a log level.
 
-Each event writes one `event` line at Info level to stderr, which MCP clients keep as the server log. Open the client's server log for awrel and search for `event` or a delivery ID. Each line records `outcome` (`delivered`, `gated`, `dropped`, or `failed`), `delivery`, `provider`, and `event`, plus `repository` and `action` when present. awrel never logs payload contents. A `gated` or `dropped` line includes a `reason`. A `failed` line includes the `error`.
+Each event writes one `event` line at Info level to stderr. Search for `event` or a delivery ID in the server log. Each line records `outcome` (`delivered`, `gated`, `dropped`, or `failed`), `delivery`, `provider`, and `event`, plus `repository` and `action` when present. awrel never logs payload contents. A `gated` or `dropped` line includes a `reason`. A `failed` line includes the `error`.
 
-Call `check_delivery` to send a self-test and see counts of delivered, gated, dropped, and failed events since the process started. The self-test doesn't count. A delivered outcome means awrel wrote the notification to the client. Confirm the self-test reaches the session.
+The client also writes to `$XDG_STATE_HOME/awrel/logs/<name>.log` (or `$HOME/.local/state/awrel/logs/<name>.log`), using the session key's hex hash or `pid-<pid>` without a key.
+
+awrel caps each file at 1 MiB with one `.log.1` backup and records metadata such as repository names and delivery IDs, but no payloads.
+
+File logging also works on Windows. If both `$XDG_STATE_HOME` and `$HOME` are empty, awrel warns and uses stderr only.
+
+Call `check_delivery` to send a self-test and report the log path along with counts of delivered, gated, dropped, and failed events since the process started. The self-test doesn't count. A delivered outcome means awrel wrote the notification to the client. Confirm the self-test reaches the session.
 
 ## Pick up a new release
 

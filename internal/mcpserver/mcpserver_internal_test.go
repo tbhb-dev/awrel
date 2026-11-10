@@ -30,6 +30,7 @@ import (
 )
 
 const (
+	testLogFile      = "test.log"
 	persistenceOff   = "off (no session key or AWREL_PERSIST=0)"
 	testVersion      = "v-test"
 	claudeCode       = "claude-code"
@@ -207,6 +208,7 @@ func startClient(t *testing.T, name string, relay *stubRelay, compact bool, clie
 	}))
 	server := New(
 		Options{
+			LogFile:     testLogFile,
 			Persistence: persistenceOff,
 			Logger:      logger,
 			Relay:       relay,
@@ -923,6 +925,7 @@ func TestRunReportsAFailedConnect(t *testing.T) {
 
 	server := New(
 		Options{
+			LogFile:     testLogFile,
 			Persistence: persistenceOff,
 			Logger:      slog.New(slog.DiscardHandler),
 			Relay:       newRelay(),
@@ -1239,15 +1242,7 @@ func TestRestoredSendsOneNoticeEvent(t *testing.T) {
 func TestNewServerHasNothingToAnnounce(t *testing.T) {
 	t.Parallel()
 
-	server := New(
-		Options{
-			Persistence: persistenceOff,
-			Logger:      slog.New(slog.DiscardHandler),
-			Relay:       newRelay(),
-			Version:     testVersion,
-			Compact:     false,
-		},
-	)
+	server := quietServer(persistenceOff)
 
 	server.mu.Lock()
 	pending := server.notices
@@ -1261,15 +1256,7 @@ func TestNewServerHasNothingToAnnounce(t *testing.T) {
 func TestRestoredWaitsForTheClient(t *testing.T) {
 	t.Parallel()
 
-	server := New(
-		Options{
-			Persistence: persistenceOff,
-			Logger:      slog.New(slog.DiscardHandler),
-			Relay:       newRelay(),
-			Version:     testVersion,
-			Compact:     false,
-		},
-	)
+	server := quietServer(persistenceOff)
 
 	server.Restored(t.Context(), 2)
 
@@ -1287,6 +1274,7 @@ func TestRestoredBeforeTheClientInitializesIsAnnouncedThen(t *testing.T) {
 
 	logs := &syncBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}}
 	server := New(Options{
+		LogFile:     testLogFile,
 		Persistence: persistenceOff,
 		Logger:      slog.New(slog.NewTextHandler(logs, nil)),
 		Relay:       newRelay(),
@@ -1414,6 +1402,7 @@ func TestWindowsPersistenceNoticeReachesTheClientOnce(t *testing.T) {
 	rig := start(t, claudeCode, newRelay())
 	server := New(
 		Options{
+			LogFile:     testLogFile,
 			Persistence: persistenceUnavailable,
 			Logger:      rig.server.logger,
 			Relay:       newRelay(),
@@ -1588,7 +1577,7 @@ func assertSelfTest(t *testing.T, raw json.RawMessage, text, previous string, ea
 		"this session is not receiving awrel events, even though subscriptions are accepted. " +
 		"Check the client's settings for receiving server notifications, then reconnect.\n" +
 		"Relay connection: connected\nRelay echo: OK\nSubscriptions: 2\n" + eventCountsZero +
-		"Persistence: " + persistenceOff
+		"Persistence: " + persistenceOff + "\nLog file: test.log"
 	if text != want {
 		t.Fatalf("result = %q, want %q", text, want)
 	}
@@ -1609,15 +1598,12 @@ func TestCheckDeliveryPersistenceStates(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			t.Parallel()
 
-			server := New(Options{
-				Persistence: state,
-				Logger:      slog.New(slog.DiscardHandler), Relay: newRelay(), Version: testVersion, Compact: false,
-			})
+			server := quietServer(state)
 			result, _, err := server.checkDelivery(t.Context(), nil, ListArgs{})
 			want := "This client has no event delivery: awrel does not know how to deliver events to client . " +
 				"Subscriptions are accepted but no event will arrive.\n" +
 				"Relay connection: not connected\nRelay echo: not sent, relay not connected\n" +
-				"Subscriptions: 0\n" + eventCountsZero + "Persistence: " + state
+				"Subscriptions: 0\n" + eventCountsZero + "Persistence: " + state + "\nLog file: test.log"
 
 			if err != nil || result.IsError || textOf(t, result) != want {
 				t.Fatalf("check_delivery = %+v, %v; want %q", result, err, want)
@@ -1635,7 +1621,7 @@ func TestCheckDeliveryWithoutDeliverer(t *testing.T) {
 	want := "This client has no event delivery: awrel does not know how to deliver events to client other. " +
 		"Subscriptions are accepted but no event will arrive.\n" +
 		"Relay connection: not connected\nRelay echo: not sent, relay not connected\nSubscriptions: 0\n" + eventCountsZero +
-		"Persistence: " + persistenceOff
+		"Persistence: " + persistenceOff + "\nLog file: test.log"
 
 	if result.IsError || textOf(t, result) != want {
 		t.Fatalf("result = %+v (%q)", result, textOf(t, result))
@@ -1662,7 +1648,7 @@ func TestCheckDeliveryFailure(t *testing.T) {
 	result := callTool(t, rig, checkTool, map[string]any{})
 	want := "Failed to send a self-test event: not connected to the relay: dial refused\n" +
 		"Relay connection: not connected\nRelay echo: not sent, relay not connected\nSubscriptions: 0\n" + eventCountsZero +
-		"Persistence: " + persistenceOff
+		"Persistence: " + persistenceOff + "\nLog file: test.log"
 
 	if result.IsError || textOf(t, result) != want {
 		t.Fatalf("result = %+v (%q)", result, textOf(t, result))
@@ -1678,6 +1664,7 @@ func TestCheckDeliveryFailure(t *testing.T) {
 // serverWithLogs creates an unconnected server whose persistence is off on every OS.
 func serverWithLogs(logs *syncBuffer) *Server {
 	return New(Options{
+		LogFile:     testLogFile,
 		Persistence: persistenceOff,
 		Logger:      slog.New(slog.NewTextHandler(logs, nil)),
 		Relay:       newRelay(), Version: "", Compact: false,
@@ -1785,7 +1772,8 @@ func TestCheckDeliveryEchoErrors(t *testing.T) {
 			result := callTool(t, rig, checkTool, map[string]any{})
 			want := "This client has no event delivery: awrel does not know how to deliver events to client other. " +
 				"Subscriptions are accepted but no event will arrive.\nRelay connection: connected\nRelay echo: " +
-				test.want + "\nSubscriptions: 0\n" + eventCountsZero + "Persistence: off (no session key or AWREL_PERSIST=0)"
+				test.want + "\nSubscriptions: 0\n" + eventCountsZero +
+				"Persistence: off (no session key or AWREL_PERSIST=0)\nLog file: test.log"
 
 			if result.IsError || textOf(t, result) != want {
 				t.Fatalf("result = %+v (%q), want %q", result, textOf(t, result), want)
@@ -1857,6 +1845,7 @@ func TestConnectionNoticesAndOutageStatus(t *testing.T) {
 	rig := start(t, claudeCode, newRelay())
 	// Queue on a server without a session, then drain through the live session.
 	server := New(Options{
+		LogFile:     testLogFile,
 		Persistence: persistenceUnavailable, Logger: rig.server.logger,
 		Relay: rig.relay, Version: testVersion, Compact: false,
 	})
@@ -1937,6 +1926,7 @@ func TestNoticeQueueDropsOldestAndWarns(t *testing.T) {
 
 	rig := start(t, claudeCode, newRelay())
 	server := New(Options{
+		LogFile:     testLogFile,
 		Persistence: persistenceOff, Logger: rig.server.logger,
 		Relay: newRelay(), Version: testVersion, Compact: false,
 	})
@@ -2034,6 +2024,13 @@ func TestConnectionDurationUsesDisplayedWindow(t *testing.T) {
 			})
 		})
 	}
+}
+
+func quietServer(persistence string) *Server {
+	return New(Options{
+		LogFile: testLogFile, Persistence: persistence,
+		Logger: slog.New(slog.DiscardHandler), Relay: newRelay(), Version: testVersion, Compact: false,
+	})
 }
 
 // blockingDeliverer records calls and stalls them until release or cancellation.

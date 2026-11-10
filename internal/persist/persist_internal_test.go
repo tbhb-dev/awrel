@@ -166,15 +166,15 @@ func TestStateDir(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"state home", map[string]string{stateEnv: "/s", homeEnv: "/h"}, "/s/awrel/sessions", false},
-		{"empty state home", map[string]string{stateEnv: "", homeEnv: "/h"}, "/h/.local/state/awrel/sessions", false},
+		{"state home", map[string]string{stateEnv: "/s", homeEnv: "/h"}, "/s/awrel", false},
+		{"empty state home", map[string]string{stateEnv: "", homeEnv: "/h"}, "/h/.local/state/awrel", false},
 		{"no home", map[string]string{}, "", true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := stateDir(env(test.vars))
+			got, err := StateDir(env(test.vars))
 			if (err != nil) != test.wantErr || filepath.ToSlash(got) != test.want {
 				t.Errorf("stateDir = %q, %v; want %q, error %v", got, err, test.want, test.wantErr)
 			}
