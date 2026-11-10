@@ -520,6 +520,10 @@ func TestErrorCauses(t *testing.T) {
 		seed(t, path, "")
 		_, err := open(filepath.Join(path, "test.log"), io.Discard, slog.New(slog.DiscardHandler), time.Now())
 		requirePathError(t, err)
+
+		if !strings.HasPrefix(err.Error(), "create log directory: ") {
+			t.Fatalf("error doesn't name the directory step: %v", err)
+		}
 	})
 
 	for _, failure := range []string{failWrite, failClose, failRename, failReopen} {
