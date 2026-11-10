@@ -14,6 +14,9 @@ import (
 	"strings"
 )
 
+// ErrEchoUnsupported means the relay predates the echo request.
+var ErrEchoUnsupported = errors.New("the relay does not support echo")
+
 var errMissingField = errors.New("missing field")
 
 const (
@@ -120,6 +123,15 @@ func EncodeFilterList(id string) []byte {
 	return mustMarshal(request{Type: "list", ID: id, Subscription: nil, SubscriptionFilters: true})
 }
 
+// EncodeEcho returns a request for an event on this socket only.
+func EncodeEcho(id, nonce string) []byte {
+	return mustMarshal(struct {
+		Type  string `json:"type"`
+		ID    string `json:"id"`
+		Nonce string `json:"nonce"`
+	}{Type: "echo", ID: id, Nonce: nonce})
+}
+
 func mustMarshal(value any) []byte {
 	var buffer bytes.Buffer
 
@@ -134,7 +146,7 @@ func mustMarshal(value any) []byte {
 	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
 }
 
-// Message is a decoded server message: Subscriptions, Error, Pong, Event or
+// Message is a decoded server message: Subscriptions, Error, Pong, Echoed, Event or
 // Unknown.
 type Message any
 
@@ -161,7 +173,12 @@ func (e Error) Error() string {
 // Pong is the reply to a ping.
 type Pong struct{}
 
-// Event is a webhook event that matched a subscription. Repository is nil
+// Echoed acknowledges an echo after its event was sent on the same socket.
+type Echoed struct {
+	ID string
+}
+
+// Event is a webhook event or a relay echo. Repository is nil
 // when the event has none. Payload is the webhook body as received.
 type Event struct {
 	Repository *string
@@ -202,6 +219,8 @@ func Decode(data []byte) (Message, error) {
 		return decodeError(data)
 	case "pong":
 		return Pong{}, nil
+	case "echoed":
+		return decodeEchoed(data)
 	case "event":
 		return decodeEvent(data)
 	default:
@@ -305,4 +324,21 @@ func decodeEvent(data []byte) (Event, error) {
 		Delivery:   *raw.Delivery,
 		Payload:    raw.Payload,
 	}, nil
+}
+
+func decodeEchoed(data []byte) (Echoed, error) {
+	var raw struct {
+		ID *string `json:"id"`
+	}
+
+	err := json.Unmarshal(data, &raw)
+	if err != nil {
+		return Echoed{}, fmt.Errorf("decode echoed: %w", err)
+	}
+
+	if raw.ID == nil {
+		return Echoed{}, missing("echoed", "id")
+	}
+
+	return Echoed{ID: *raw.ID}, nil
 }

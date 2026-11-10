@@ -34,8 +34,13 @@ interface SubscriptionsReply {
   readonly subscription_filters?: true;
 }
 
-/** What a client message calls for: a reply, and the new list if it changed. */
+/** A reply, a changed list, or an echo event to send before the reply. */
 export type Outcome =
+  | {
+      readonly reply: { readonly type: "echoed"; readonly id: string };
+      readonly next: null;
+      readonly echo: string;
+    }
   | { readonly reply: ErrorReply | SubscriptionsReply; readonly next: null }
   | {
       readonly reply: SubscriptionsReply;
@@ -317,7 +322,12 @@ function read(message: string | ArrayBuffer): Outcome | Request {
     typeof rawId === "string" && rawId.length >= 1 && rawId.length <= 64
       ? rawId
       : null;
-  if (type !== "subscribe" && type !== "unsubscribe" && type !== "list") {
+  if (
+    type !== "subscribe" &&
+    type !== "unsubscribe" &&
+    type !== "list" &&
+    type !== "echo"
+  ) {
     return fail(id, "bad_message", "unknown message type");
   }
   if (id === null) {
@@ -326,6 +336,13 @@ function read(message: string | ArrayBuffer): Outcome | Request {
       "bad_message",
       "id must be a string of 1 to 64 characters",
     );
+  }
+  if (type === "echo") {
+    const { nonce } = parsed;
+    if (typeof nonce !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(nonce)) {
+      return fail(id, "bad_message", "nonce must match ^[A-Za-z0-9_-]{1,64}$");
+    }
+    return { reply: { type: "echoed", id }, next: null, echo: nonce };
   }
   return {
     type,
