@@ -1705,33 +1705,6 @@ func subscriptionJSON(t *testing.T, subs []protocol.Subscription) []byte {
 	return data
 }
 
-func TestFilteredReplayRefusalPreservesMirror(t *testing.T) {
-	t.Parallel()
-	relay := newFakeRelay(t)
-	client, stop := relay.start(t, quiet())
-	awaitConnected(t, client)
-
-	sub := filteredSub()
-
-	_, err := client.Subscribe(t.Context(), sub)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	relay.setRefuse(sub.Canonical())
-	relay.drop()
-	eventually(t, "replay refusal", client.incompatible.Load)
-	stop()
-
-	if got := client.snapshot(); len(got) != 1 || !got[0].Equal(sub) {
-		t.Fatalf("mirror = %+v", got)
-	}
-
-	if relay.connCount() != 2 {
-		t.Fatal("retried rejected filters")
-	}
-}
-
 func TestFilteredTimeoutClosesConnection(t *testing.T) {
 	t.Parallel()
 	relay := newFakeRelay(t)
@@ -1939,40 +1912,6 @@ func TestIncompatibleSubscribeStopsRun(t *testing.T) {
 
 	if relay.dials.Load() != 1 {
 		t.Fatal("retried incompatible relay")
-	}
-}
-
-func TestRejectedFilteredReplayStopsRun(t *testing.T) {
-	t.Parallel()
-	relay := newFakeRelay(t)
-	opts := quiet()
-	opts.Dial = relay.dial
-	client := New(opts)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	finished := make(chan error, 1)
-	go func() { finished <- client.Run(ctx) }()
-
-	awaitConnected(t, client)
-
-	sub := filteredSub()
-	mustSubscribe(t, client, sub)
-	relay.setRefuse(sub.Canonical())
-	relay.drop()
-
-	err := receive(t, finished, "rejected replay Run exit")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !errors.Is(client.cause(), ErrRelayTooOld) {
-		t.Fatal("filtered replay reported success")
-	}
-
-	if got := client.snapshot(); !sameSubscriptions(got, sub) {
-		t.Fatalf("mirror = %+v", got)
 	}
 }
 

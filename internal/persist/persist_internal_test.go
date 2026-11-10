@@ -265,6 +265,109 @@ func TestOpen(t *testing.T) {
 	})
 }
 
+func TestOpenKeepsItsOwnOldFile(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	state := t.TempDir()
+	vars := env(map[string]string{stateEnv: state})
+	logger, logs := newLogs()
+
+	first := Open(testKey, testEndpoint, vars, logger, now)
+	if first == nil {
+		t.Fatal("Open returned no Store")
+	}
+
+	first.flock = boundedFlock
+
+	err := first.Add(sub("push", "o/r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	otherFile := filepath.Join(state, "awrel", "sessions", "other.json")
+	mustWrite(t, otherFile, "{}")
+	age(t, first.path, now)
+	age(t, otherFile, now)
+
+	second := Open(testKey, testEndpoint, vars, logger, now)
+	if second == nil {
+		t.Fatal("Open returned no Store")
+	}
+
+	if got := second.Load(); !sameSubs(got, sub("push", "o/r")) {
+		t.Errorf("subscriptions = %v, want the old file's", got)
+	}
+
+	if exists(otherFile) {
+		t.Error("another session's old file stayed")
+	}
+
+	if logs.String() != "" {
+		t.Errorf("unexpected logs:\n%s", logs.String())
+	}
+}
+
+func TestTouchRefreshesTheFile(t *testing.T) {
+	t.Parallel()
+
+	store, logs := testStore(t)
+
+	err := store.Add(sub("push", "o/r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	age(t, store.path, time.Now())
+
+	store.Touch()
+
+	info, err := os.Stat(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if since := time.Since(info.ModTime()); since > time.Minute || since < -time.Minute {
+		t.Errorf("modification time is %s old, want a fresh one", since)
+	}
+
+	if logs.String() != "" {
+		t.Errorf("unexpected logs:\n%s", logs.String())
+	}
+}
+
+func TestTouchWithoutAFileIsQuiet(t *testing.T) {
+	t.Parallel()
+
+	store, logs := testStore(t)
+
+	store.Touch()
+
+	if logs.String() != "" {
+		t.Errorf("unexpected logs:\n%s", logs.String())
+	}
+
+	if exists(store.path) {
+		t.Error("Touch made the file")
+	}
+}
+
+func TestTouchWarnsOnAFailure(t *testing.T) {
+	t.Parallel()
+
+	store, logs := testStore(t)
+
+	blocker := filepath.Join(t.TempDir(), "file")
+	mustWrite(t, blocker, "")
+
+	store.path = filepath.Join(blocker, "session.json")
+	store.Touch()
+
+	if !strings.Contains(logs.String(), "refresh the session file's age") {
+		t.Errorf("no warning:\n%s", logs.String())
+	}
+}
+
 // age sets the file's modification time to just past MaxAge before now.
 func age(t *testing.T, path string, now time.Time) {
 	t.Helper()

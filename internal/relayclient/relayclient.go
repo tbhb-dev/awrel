@@ -31,10 +31,11 @@ const (
 	defaultPongTimeout    = 10 * time.Second
 	defaultRequestTimeout = 10 * time.Second
 	// backoffFactor is the growth of the retry delay per attempt.
-	backoffFactor    = 2
-	requestList      = "list"
-	requestSubscribe = "subscribe"
-	maxMessageBytes  = 4096
+	backoffFactor      = 2
+	requestList        = "list"
+	requestSubscribe   = "subscribe"
+	requestUnsubscribe = "unsubscribe"
+	maxMessageBytes    = 4096
 )
 
 var (
@@ -72,6 +73,8 @@ func (e *NotConnectedError) Unwrap() error {
 type Store interface {
 	Add(sub protocol.Subscription) error
 	Remove(sub protocol.Subscription) error
+	// Touch resets the age of the saved file. A Store without a file does nothing.
+	Touch()
 }
 
 // nopStore is the Store of a client that saves nothing.
@@ -79,6 +82,7 @@ type nopStore struct{}
 
 func (nopStore) Add(protocol.Subscription) error    { return nil }
 func (nopStore) Remove(protocol.Subscription) error { return nil }
+func (nopStore) Touch()                             {}
 
 // Options configures a Client. Dial, OnEvent and Logger are required; a zero
 // duration, a nil Rand, a nil Store or a nil OnRestored selects the default.
@@ -320,6 +324,7 @@ func (c *Client) session(ctx context.Context) bool {
 		return false
 	}
 
+	c.opts.Store.Touch()
 	c.markReady(sess)
 	c.announceRestored(ctx)
 
@@ -400,8 +405,10 @@ func (c *Client) kickDial() {
 	}
 }
 
-// resubscribe replays the mirror on a new session, dropping unfiltered entries
-// that the relay rejects. Rejected filters preserve the mirror and stop retries.
+// resubscribe replays the mirror on a new session. An entry that the relay
+// rejects, filtered or not, is dropped from the mirror and the store, so that
+// no later start replays it. The missing filter echo, not a rejection, marks a
+// relay too old for filters.
 func (c *Client) resubscribe(ctx context.Context, sess *session) error {
 	for _, sub := range c.snapshot() {
 		reqCtx, cancel := context.WithTimeout(ctx, c.opts.RequestTimeout)
@@ -411,14 +418,12 @@ func (c *Client) resubscribe(ctx context.Context, sess *session) error {
 		cancel()
 
 		if relayErr, ok := errors.AsType[*protocol.Error](err); ok {
-			if sub.HasFilters() {
-				c.incompatible.Store(true)
-
-				return ErrRelayTooOld
-			}
-
-			c.opts.Logger.WarnContext(ctx, "relay rejected a resubscribe", slog.Any("error", relayErr))
+			c.opts.Logger.WarnContext(
+				ctx, "relay rejected a restored subscription, dropping it",
+				slog.Any("subscription", sub), slog.Any("error", relayErr),
+			)
 			c.dropFromMirror(sub)
+			c.persist(ctx, requestUnsubscribe, sub)
 
 			continue
 		}

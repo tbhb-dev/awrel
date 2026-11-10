@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,16 +42,19 @@ func (l *ledger[T]) seen() []T {
 
 // recordingStore is a Store that remembers its calls.
 type recordingStore struct {
-	err   error
-	calls ledger[string]
+	err     error
+	calls   ledger[string]
+	touches atomic.Int32
 }
 
 func newRecordingStore(err error) *recordingStore {
-	return &recordingStore{err: err, calls: ledger[string]{items: nil, mu: sync.Mutex{}}}
+	return &recordingStore{err: err, calls: ledger[string]{items: nil, mu: sync.Mutex{}}, touches: atomic.Int32{}}
 }
 
 func (s *recordingStore) Add(sub protocol.Subscription) error    { return s.record("add", sub) }
 func (s *recordingStore) Remove(sub protocol.Subscription) error { return s.record("remove", sub) }
+
+func (s *recordingStore) Touch() { s.touches.Add(1) }
 
 func (s *recordingStore) record(verb string, sub protocol.Subscription) error {
 	s.calls.add(verb + " " + sub.Repository)
@@ -329,4 +333,165 @@ func (l *lockedWriter) String() string {
 	defer l.mu.Unlock()
 
 	return l.w.String()
+}
+
+// otherFilteredSub is a second filtered subscription, which the relay accepts.
+func otherFilteredSub() protocol.Subscription {
+	return protocol.Subscription{
+		Provider: providerGitHub, Event: "check_run", Repository: "o/other", Action: []string{"completed"},
+	}
+}
+
+// loggedClient returns opts that log to the returned buffer.
+func loggedClient(opts Options) (Options, *lockedWriter) {
+	logs := &lockedWriter{w: &bytes.Buffer{}, mu: sync.Mutex{}}
+	opts.Logger = slog.New(slog.NewTextHandler(logs, nil))
+
+	return opts, logs
+}
+
+func TestSeededStartSkipsARejectedFilteredEntry(t *testing.T) {
+	t.Parallel()
+
+	rejected, accepted := filteredSub().Canonical(), otherFilteredSub()
+
+	relay := newFakeRelay(t)
+	relay.setRefuse(rejected)
+
+	recorder, store := newRestoreRecorder(), newRecordingStore(nil)
+
+	opts, logs := loggedClient(quiet())
+	opts.Initial = []protocol.Subscription{rejected, accepted}
+	opts.OnRestored = recorder.onRestored
+	opts.Store = store
+
+	client, _ := relay.start(t, opts)
+	awaitReady(t, client)
+
+	if client.incompatible.Load() {
+		t.Fatal("a rejected filtered entry marked the relay too old")
+	}
+
+	if got := mirrorOf(client); !sameSubscriptions(got, accepted) {
+		t.Errorf("mirror = %v, want only the accepted entry", got)
+	}
+
+	if got, want := strings.Join(store.calls.seen(), ","), "remove owner/repo"; got != want {
+		t.Errorf("store calls = %s, want %s", got, want)
+	}
+
+	if got := recorder.counts.seen(); !slices.Equal(got, []int{1}) {
+		t.Errorf("restore notice = %v, want [1]", got)
+	}
+
+	if got := store.touches.Load(); got != 1 {
+		t.Errorf("touches = %d, want one after the replay", got)
+	}
+
+	if text := logs.String(); !strings.Contains(text, "relay rejected a restored subscription") ||
+		!strings.Contains(text, "full") {
+		t.Errorf("no warning in the logs:\n%s", text)
+	}
+
+	_, err := client.Subscribe(t.Context(), subA())
+	if err != nil {
+		t.Errorf("Subscribe after the skip = %v", err)
+	}
+}
+
+func TestSeededStartRemovesARejectedUnfilteredEntry(t *testing.T) {
+	t.Parallel()
+
+	relay := newFakeRelay(t)
+	relay.setRefuse(subB())
+
+	recorder, store := newRestoreRecorder(), newRecordingStore(nil)
+
+	opts := quiet()
+	opts.Initial = []protocol.Subscription{subA(), subB()}
+	opts.OnRestored = recorder.onRestored
+	opts.Store = store
+
+	client, _ := relay.start(t, opts)
+	eventually(t, "the restore notice", func() bool { return len(recorder.counts.seen()) == 1 })
+
+	if got := mirrorOf(client); !sameSubscriptions(got, subA()) {
+		t.Errorf("mirror = %v, want only the accepted entry", got)
+	}
+
+	if got, want := strings.Join(store.calls.seen(), ","), "remove o/b"; got != want {
+		t.Errorf("store calls = %s, want %s", got, want)
+	}
+
+	if got := recorder.counts.seen(); !slices.Equal(got, []int{1}) {
+		t.Errorf("restore notice = %v, want [1]", got)
+	}
+}
+
+func TestReconnectSkipsARejectedFilteredEntry(t *testing.T) {
+	t.Parallel()
+
+	rejected, accepted := filteredSub().Canonical(), otherFilteredSub()
+
+	relay := newFakeRelay(t)
+	store := newRecordingStore(nil)
+
+	opts := quiet()
+	opts.Store = store
+
+	client, _ := relay.start(t, opts)
+	awaitConnected(t, client)
+	mustSubscribe(t, client, rejected, accepted)
+
+	old := currentSession(client)
+
+	relay.setRefuse(rejected)
+	relay.drop()
+	awaitNewSession(t, client, old)
+
+	if client.incompatible.Load() {
+		t.Fatal("a rejected filtered entry marked the relay too old")
+	}
+
+	if got := mirrorOf(client); !sameSubscriptions(got, accepted) {
+		t.Errorf("mirror = %v, want only the accepted entry", got)
+	}
+
+	if got, want := strings.Join(
+		store.calls.seen(),
+		",",
+	), "add owner/repo,add o/other,remove owner/repo"; got != want {
+		t.Errorf("store calls = %s, want %s", got, want)
+	}
+
+	if got := store.touches.Load(); got != 2 {
+		t.Errorf("touches = %d, want one per replay", got)
+	}
+
+	_, err := client.Subscribe(t.Context(), subA())
+	if err != nil {
+		t.Errorf("Subscribe after the skip = %v", err)
+	}
+}
+
+func TestFailedReplayDoesNotTouchTheStore(t *testing.T) {
+	t.Parallel()
+
+	relay := newFakeRelay(t)
+	relay.setIntercept(silenceSubscribesOn(1))
+
+	store := newRecordingStore(nil)
+
+	opts := quiet()
+	opts.Initial = []protocol.Subscription{subA()}
+	opts.RequestTimeout = 50 * time.Millisecond
+	opts.Store = store
+
+	client, _ := relay.start(t, opts)
+	eventually(t, "a second connection", func() bool { return relay.connCount() >= 2 })
+	awaitReady(t, client)
+
+	if got := store.touches.Load(); got != 1 {
+		t.Errorf("touches = %d, want one, from the replay that worked", got)
+	}
 }

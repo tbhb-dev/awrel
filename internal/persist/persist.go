@@ -87,7 +87,7 @@ type Store struct {
 }
 
 // Open returns the Store for the session key and the relay endpoint, after it
-// prunes old session files. It returns nil when persistence is off, when the
+// refreshes the session's own file and prunes old session files. It returns nil when persistence is off, when the
 // key is empty, or when no state directory can be found. In the last case it
 // logs a warning.
 func Open(
@@ -104,9 +104,13 @@ func Open(
 		return nil
 	}
 
+	store := newStore(dir, key, endpoint, logger)
+
+	// Refresh first, so that the session's own restart never prunes its file.
+	store.touch(now)
 	Prune(dir, now, logger)
 
-	return newStore(dir, key, endpoint, logger)
+	return store
 }
 
 // stateDir is $XDG_STATE_HOME/awrel/sessions, with ~/.local/state when
@@ -216,11 +220,25 @@ func (s *Store) Add(sub protocol.Subscription) error {
 	})
 }
 
+// Touch sets the file's modification time to now, so that Prune keeps the
+// file of a live session. A missing file is fine. Another failure logs a
+// warning.
+func (s *Store) Touch() {
+	s.touch(time.Now())
+}
+
 // Remove deletes sub from the file.
 func (s *Store) Remove(sub protocol.Subscription) error {
 	return s.update(func(subs []protocol.Subscription) []protocol.Subscription {
 		return slices.DeleteFunc(subs, sub.Equal)
 	})
+}
+
+func (s *Store) touch(now time.Time) {
+	err := os.Chtimes(s.path, now, now)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		s.logger.Warn("refresh the session file's age", slog.String("path", s.path), slog.Any("error", err))
+	}
 }
 
 // read returns the file's subscriptions: none when the file is missing or

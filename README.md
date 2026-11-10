@@ -59,7 +59,11 @@ Each key maps to the file `$XDG_STATE_HOME/awrel/sessions/<sha256 of the key>.js
 
 If the file has at least one subscription for the current endpoint, the server connects to the relay at once and replays them. Events then arrive before any tool call, and `list_subscriptions` shows restored entries like any others. Once the replay succeeds, one MCP logging notification (`notifications/message`, level `info`) tells the agent, such as `restored 3 subscriptions from the previous run`. Per the MCP SDK, only a client that has set a log level with `logging/setLevel` receives logging notifications.
 
-Each acknowledged `subscribe` or `unsubscribe` triggers a write. A failed write logs a warning to stderr, and the tool call still succeeds. Processes that share a key, such as an old process that keeps running after a reconnect, don't overwrite each other: a write locks and rereads the file, then applies only its own change. Restoring alone never writes.
+Each acknowledged `subscribe` or `unsubscribe` triggers a write. A failed write logs a warning to stderr, and the tool call still succeeds. Processes that share a key, such as an old process that keeps running after a reconnect, don't overwrite each other: a write locks and rereads the file, then applies only its own change. Restoring writes only to remove a subscription that the relay refuses.
+
+The server drops a subscription that the relay refuses at restore, with a warning and a removal from the file, and the rest still restore.
+
+Startup deletes files idle for 14 days. A session's own start and each reconnect reset its file's age.
 
 Session files that nobody touched for 14 days disappear at the next startup. Set `AWREL_PERSIST=0` to turn off loading, writing, and pruning.
 
