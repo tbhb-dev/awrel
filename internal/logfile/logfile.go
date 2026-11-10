@@ -71,6 +71,7 @@ type writer struct {
 	path     string
 	mu       sync.Mutex
 	stopped  bool
+	size     int64
 }
 
 func open(path string, stderr io.Writer, logger *slog.Logger, now time.Time) (*writer, error) {
@@ -83,24 +84,29 @@ func open(path string, stderr io.Writer, logger *slog.Logger, now time.Time) (*w
 
 	prune(dir, now, logger, os.ReadDir, os.Remove)
 
-	file, err := appendFile(path, os.OpenFile)
+	file, size, err := appendFile(path, os.OpenFile)
 	if err != nil {
 		return nil, err
 	}
 
 	return &writer{
 		stderr: stderr, file: file, logger: logger, openFile: os.OpenFile,
-		rename: os.Rename, path: path, mu: sync.Mutex{}, stopped: false,
+		rename: os.Rename, path: path, mu: sync.Mutex{}, stopped: false, size: size,
 	}, nil
 }
 
-func appendFile(path string, openFile func(string, int, fs.FileMode) (*os.File, error)) (*os.File, error) {
+func appendFile(path string, openFile func(string, int, fs.FileMode) (*os.File, error)) (*os.File, int64, error) {
 	file, err := openFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fileMode)
 	if err != nil {
-		return nil, fmt.Errorf("open log file: %w", err)
+		return nil, 0, fmt.Errorf("open log file: %w", err)
 	}
 
-	return file, nil
+	info, err := file.Stat()
+	if err != nil {
+		return nil, 0, fmt.Errorf("stat log file: %w", errors.Join(err, file.Close()))
+	}
+
+	return file, info.Size(), nil
 }
 
 // Write copies each record to stderr and the file. Warnings use stderr directly to
@@ -123,19 +129,16 @@ func (w *writer) Write(data []byte) (int, error) {
 
 func (w *writer) write(data []byte) error {
 	for chunk := range slices.Chunk(data, maxBytes) {
-		info, err := w.file.Stat()
-		if err != nil {
-			return fmt.Errorf("stat log file: %w", err)
-		}
-
-		if info.Size()+int64(len(chunk)) > maxBytes {
-			err = w.rotate()
+		if w.size+int64(len(chunk)) > maxBytes {
+			err := w.rotate()
 			if err != nil {
 				return err
 			}
 		}
 
-		_, err = w.file.Write(chunk)
+		written, err := w.file.Write(chunk)
+		w.size += int64(written)
+
 		if err != nil {
 			return fmt.Errorf("write log file: %w", err)
 		}
@@ -155,12 +158,13 @@ func (w *writer) rotate() error {
 		return fmt.Errorf("rotate log file: %w", err)
 	}
 
-	file, err := appendFile(w.path, w.openFile)
+	file, _, err := appendFile(w.path, w.openFile)
 	if err != nil {
 		return err
 	}
 
 	w.file = file
+	w.size = 0
 
 	return nil
 }

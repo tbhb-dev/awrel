@@ -23,6 +23,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/spf13/cobra"
 
+	"go.tbhb.dev/awrel/internal/logfile"
 	"go.tbhb.dev/awrel/internal/mcpserver"
 	"go.tbhb.dev/awrel/internal/persist"
 	"go.tbhb.dev/awrel/internal/protocol"
@@ -343,7 +344,7 @@ func TestServeMCPAnnouncesInjectedRestore(t *testing.T) {
 		}
 	}
 	go func() {
-		running.done <- serveMCP(cmd, reader, "", false, "", env(nil), 0, connect)
+		running.done <- serveMCP(cmd, reader, "", false, "", env(nil), 0, connect, logfile.Open)
 
 		ignore(reader.Close())
 	}()
