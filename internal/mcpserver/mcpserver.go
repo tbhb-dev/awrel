@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -78,8 +79,8 @@ type Relay interface {
 	Unsubscribe(ctx context.Context, sub protocol.Subscription) ([]protocol.Subscription, error)
 	Echo(ctx context.Context, nonce string) error
 	List(ctx context.Context) ([]protocol.Subscription, error)
-	// Status reads the connection state and subscription count without contacting the relay.
-	Status() (connected bool, subscriptions int)
+	// Status reads connection state, subscription count and gated event count locally.
+	Status() (connected bool, subscriptions int, gated uint64)
 }
 
 // Options configure a Server.
@@ -158,9 +159,12 @@ type Server struct {
 	client      string
 	persistence string
 	// notice is the session notice that the agent hasn't heard yet.
-	notice  string
-	mu      sync.Mutex
-	compact bool
+	notice    string
+	mu        sync.Mutex
+	compact   bool
+	delivered atomic.Uint64
+	dropped   atomic.Uint64
+	failed    atomic.Uint64
 }
 
 // New returns a Server that drives opts.Relay.
@@ -177,6 +181,9 @@ func New(opts Options) *Server {
 		notice:      "",
 		mu:          sync.Mutex{},
 		compact:     opts.Compact,
+		delivered:   atomic.Uint64{},
+		dropped:     atomic.Uint64{},
+		failed:      atomic.Uint64{},
 	}
 
 	if opts.Persistence == "unavailable on this platform" {
@@ -247,17 +254,34 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 // has no way to receive one.
 func (s *Server) HandleEvent(ctx context.Context, event protocol.Event) {
 	current := s.currentClient()
+	described := delivery.Describe(event)
+
 	if current.deliverer == nil {
-		s.logger.DebugContext(ctx, "event dropped: the client has no event delivery",
-			"event", event.Event, "delivery", event.Delivery)
+		if described.Counted() {
+			s.dropped.Add(1)
+		}
+
+		described.Log(ctx, s.logger, "dropped", "reason", "no event delivery for this client")
 
 		return
 	}
 
-	err := current.deliverer.Deliver(ctx, event)
+	err := current.deliverer.Deliver(ctx, described)
 	if err != nil {
-		s.logger.WarnContext(ctx, "event not delivered", "error", err, "delivery", event.Delivery)
+		if described.Counted() {
+			s.failed.Add(1)
+		}
+
+		described.Log(ctx, s.logger, "failed", "error", err)
+
+		return
 	}
+
+	if described.Counted() {
+		s.delivered.Add(1)
+	}
+
+	described.Log(ctx, s.logger, "delivered")
 }
 
 // Restored records that the relay client restored count subscriptions from the
@@ -433,10 +457,15 @@ func (s *Server) checkDelivery(
 			),
 		}
 
-		err := current.deliverer.Deliver(ctx, event)
+		described := delivery.Describe(event)
+
+		err := current.deliverer.Deliver(ctx, described)
 		if err != nil {
+			described.Log(ctx, s.logger, "failed", "error", err)
 			message = "Failed to send a self-test event: " + err.Error()
 		} else {
+			described.Log(ctx, s.logger, "delivered")
+
 			message = "Sent a self-test event with delivery id " + nonce +
 				". If an event with that delivery id does not reach this session within this turn, " +
 				"this session is not receiving awrel events, even though subscriptions are accepted. " +
@@ -444,15 +473,25 @@ func (s *Server) checkDelivery(
 		}
 	}
 
-	connected, count := s.relay.Status()
+	connected, count, gated := s.relay.Status()
 	state := "not connected"
 
 	if connected {
 		state = "connected"
 	}
 
-	message += fmt.Sprintf("\nRelay connection: %s\nRelay echo: %s\nSubscriptions: %d\nPersistence: %s",
-		state, s.relayEcho(ctx, connected), count, s.persistence)
+	message += fmt.Sprintf(
+		"\nRelay connection: %s\nRelay echo: %s\nSubscriptions: %d"+
+			"\nEvents since start: %d delivered, %d gated, %d dropped, %d failed\nPersistence: %s",
+		state,
+		s.relayEcho(ctx, connected),
+		count,
+		s.delivered.Load(),
+		gated,
+		s.dropped.Load(),
+		s.failed.Load(),
+		s.persistence,
+	)
 
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: message}}}, nil, nil
 }

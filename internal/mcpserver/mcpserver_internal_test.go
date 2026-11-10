@@ -25,26 +25,31 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"go.tbhb.dev/awrel/internal/delivery"
 	"go.tbhb.dev/awrel/internal/protocol"
 )
 
 const (
-	persistenceOff  = "off (no session key or AWREL_PERSIST=0)"
-	testVersion     = "v-test"
-	claudeCode      = "claude-code"
-	otherName       = "other"
-	githubName      = "github"
-	ownerRepo       = "o/r"
-	providerKey     = "provider"
-	eventKey        = "event"
-	repositoryKey   = "repository"
-	pushEvent       = "push"
-	subscribeTool   = "subscribe"
-	unsubscribeTool = "unsubscribe"
-	listTool        = "list_subscriptions"
-	checkTool       = "check_delivery"
-	waitLimit       = time.Second
-	channelMethod   = "notifications/claude/channel"
+	persistenceOff   = "off (no session key or AWREL_PERSIST=0)"
+	testVersion      = "v-test"
+	claudeCode       = "claude-code"
+	otherName        = "other"
+	githubName       = "github"
+	ownerRepo        = "o/r"
+	providerKey      = "provider"
+	eventKey         = "event"
+	repositoryKey    = "repository"
+	pushEvent        = "push"
+	subscribeTool    = "subscribe"
+	unsubscribeTool  = "unsubscribe"
+	listTool         = "list_subscriptions"
+	checkTool        = "check_delivery"
+	waitLimit        = time.Second
+	deliveredOutcome = "delivered"
+	droppedOutcome   = "dropped"
+	failedOutcome    = "failed"
+	eventCountsZero  = "Events since start: 0 delivered, 0 gated, 0 dropped, 0 failed\n"
+	channelMethod    = "notifications/claude/channel"
 )
 
 // syncBuffer is a log sink that more than one goroutine may write and read.
@@ -75,6 +80,7 @@ type stubRelay struct {
 	last      protocol.Subscription
 	calls     []string
 	connected bool
+	gated     uint64
 	mu        sync.Mutex
 }
 
@@ -100,11 +106,11 @@ func (r *stubRelay) Echo(_ context.Context, nonce string) error {
 	return r.err
 }
 
-func (r *stubRelay) Status() (bool, int) {
+func (r *stubRelay) Status() (bool, int, uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return r.connected, len(r.subs)
+	return r.connected, len(r.subs), r.gated
 }
 
 func (r *stubRelay) change(verb string, sub protocol.Subscription) ([]protocol.Subscription, error) {
@@ -286,6 +292,7 @@ func newRelay() *stubRelay {
 		subs:      nil,
 		calls:     nil,
 		connected: false,
+		gated:     0,
 		mu:        sync.Mutex{},
 	}
 }
@@ -438,7 +445,7 @@ func TestInitializeResult(t *testing.T) {
 		t.Errorf("protocol version = %q", result.ProtocolVersion)
 	}
 
-	if result.ServerInfo.Name != "awrel" || result.ServerInfo.Version != testVersion {
+	if result.ServerInfo.Name != serverName || result.ServerInfo.Version != testVersion {
 		t.Errorf("server info = %+v", result.ServerInfo)
 	}
 
@@ -723,7 +730,7 @@ func TestHandleEventDropsForOtherClients(t *testing.T) {
 
 	rig.server.HandleEvent(t.Context(), testEvent())
 
-	if !strings.Contains(rig.logs.String(), "event dropped") {
+	if !strings.Contains(rig.logs.String(), "outcome=dropped") {
 		t.Errorf("no drop in the log:\n%s", rig.logs.String())
 	}
 
@@ -757,7 +764,7 @@ func TestClientInitializedIsLogged(t *testing.T) {
 // failingDeliverer fails every delivery.
 type failingDeliverer struct{}
 
-func (failingDeliverer) Deliver(context.Context, protocol.Event) error {
+func (failingDeliverer) Deliver(context.Context, delivery.Event) error {
 	return errNotConnected
 }
 
@@ -770,7 +777,7 @@ func TestHandleEventLogsFailedDelivery(t *testing.T) {
 
 	server.HandleEvent(t.Context(), testEvent())
 
-	if got := logs.String(); !strings.Contains(got, "event not delivered") || !strings.Contains(got, "delivery=d1") {
+	if got := logs.String(); !strings.Contains(got, "outcome=failed") || !strings.Contains(got, "delivery=d1") {
 		t.Errorf("log:\n%s", got)
 	}
 }
@@ -1125,7 +1132,7 @@ type loggingRig struct {
 
 const (
 	infoLevel   = "info"
-	awrelLogger = "awrel"
+	awrelLogger = serverName
 )
 
 //nolint:staticcheck // the restore notice is an SDK logging message
@@ -1471,7 +1478,7 @@ func assertSelfTest(t *testing.T, raw json.RawMessage, text, previous string, ea
 		t.Fatalf("nonce = %q, previous = %q", nonce, previous)
 	}
 
-	wantMeta := map[string]string{"provider": "awrel", "event": "self_test", "delivery": nonce}
+	wantMeta := map[string]string{"provider": serverName, "event": "self_test", "delivery": nonce}
 	if compact {
 		wantMeta["compact"] = "true"
 	}
@@ -1500,7 +1507,8 @@ func assertSelfTest(t *testing.T, raw json.RawMessage, text, previous string, ea
 		". If an event with that delivery id does not reach this session within this turn, " +
 		"this session is not receiving awrel events, even though subscriptions are accepted. " +
 		"Check the client's settings for receiving server notifications, then reconnect.\n" +
-		"Relay connection: connected\nRelay echo: OK\nSubscriptions: 2\nPersistence: off (no session key or AWREL_PERSIST=0)"
+		"Relay connection: connected\nRelay echo: OK\nSubscriptions: 2\n" + eventCountsZero +
+		"Persistence: " + persistenceOff
 	if text != want {
 		t.Fatalf("result = %q, want %q", text, want)
 	}
@@ -1529,7 +1537,7 @@ func TestCheckDeliveryPersistenceStates(t *testing.T) {
 			want := "This client has no event delivery: awrel does not know how to deliver events to client . " +
 				"Subscriptions are accepted but no event will arrive.\n" +
 				"Relay connection: not connected\nRelay echo: not sent, relay not connected\n" +
-				"Subscriptions: 0\nPersistence: " + state
+				"Subscriptions: 0\n" + eventCountsZero + "Persistence: " + state
 
 			if err != nil || result.IsError || textOf(t, result) != want {
 				t.Fatalf("check_delivery = %+v, %v; want %q", result, err, want)
@@ -1546,8 +1554,8 @@ func TestCheckDeliveryWithoutDeliverer(t *testing.T) {
 	result := callTool(t, rig, checkTool, map[string]any{})
 	want := "This client has no event delivery: awrel does not know how to deliver events to client other. " +
 		"Subscriptions are accepted but no event will arrive.\n" +
-		"Relay connection: not connected\nRelay echo: not sent, relay not connected\n" +
-		"Subscriptions: 0\nPersistence: off (no session key or AWREL_PERSIST=0)"
+		"Relay connection: not connected\nRelay echo: not sent, relay not connected\nSubscriptions: 0\n" + eventCountsZero +
+		"Persistence: " + persistenceOff
 
 	if result.IsError || textOf(t, result) != want {
 		t.Fatalf("result = %+v (%q)", result, textOf(t, result))
@@ -1573,11 +1581,17 @@ func TestCheckDeliveryFailure(t *testing.T) {
 	rig.server.mu.Unlock()
 	result := callTool(t, rig, checkTool, map[string]any{})
 	want := "Failed to send a self-test event: not connected to the relay: dial refused\n" +
-		"Relay connection: not connected\nRelay echo: not sent, relay not connected\n" +
-		"Subscriptions: 0\nPersistence: off (no session key or AWREL_PERSIST=0)"
+		"Relay connection: not connected\nRelay echo: not sent, relay not connected\nSubscriptions: 0\n" + eventCountsZero +
+		"Persistence: " + persistenceOff
 
 	if result.IsError || textOf(t, result) != want {
 		t.Fatalf("result = %+v (%q)", result, textOf(t, result))
+	}
+
+	for _, attr := range []string{"event=self_test", "outcome=failed"} {
+		if !strings.Contains(rig.logs.String(), attr) {
+			t.Fatalf("self-test missing %s in log: %s", attr, rig.logs.String())
+		}
 	}
 }
 
@@ -1588,6 +1602,86 @@ func serverWithLogs(logs *syncBuffer) *Server {
 		Logger:      slog.New(slog.NewTextHandler(logs, nil)),
 		Relay:       newRelay(), Version: "", Compact: false,
 	})
+}
+
+// successfulDeliverer accepts a notification without a transport.
+type successfulDeliverer struct{}
+
+func (successfulDeliverer) Deliver(context.Context, delivery.Event) error { return nil }
+
+func TestEventOutcomesAndCounts(t *testing.T) {
+	t.Parallel()
+
+	logs := &syncBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}}
+	server := serverWithLogs(logs)
+	relay := newRelay()
+	relay.gated = 13
+	server.relay = relay
+
+	const events = 32
+
+	for _, outcome := range []string{droppedOutcome, failedOutcome, deliveredOutcome} {
+		switch outcome {
+		case failedOutcome:
+			server.deliverer = failingDeliverer{}
+		case deliveredOutcome:
+			server.deliverer = successfulDeliverer{}
+		}
+
+		var workers sync.WaitGroup
+		for range events {
+			workers.Go(func() { server.HandleEvent(t.Context(), testEvent()) })
+		}
+
+		workers.Wait()
+	}
+
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 3*events {
+		t.Fatalf("got %d log lines", len(lines))
+	}
+
+	assertOutcomeLines(t, lines, events)
+
+	for range 2 {
+		result, _, err := server.checkDelivery(t.Context(), nil, ListArgs{})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		want := "Subscriptions: 0\nEvents since start: 32 delivered, 13 gated, 32 dropped, 32 failed\nPersistence:"
+		if !strings.Contains(textOf(t, result), want) {
+			t.Fatal(textOf(t, result))
+		}
+	}
+
+	if got := strings.Count(logs.String(), "event=self_test"); got != 2 {
+		t.Fatalf("self-test outcome lines = %d", got)
+	}
+}
+
+func assertOutcomeLines(t *testing.T, lines []string, events int) {
+	t.Helper()
+
+	for i, line := range lines {
+		outcome := []string{droppedOutcome, failedOutcome, deliveredOutcome}[i/events]
+		for _, attr := range []string{
+			"level=INFO", "msg=event", "outcome=" + outcome, "delivery=d1",
+			"provider=github", "event=issue_comment", "repository=o/r", "action=created",
+		} {
+			if !strings.Contains(line, attr) {
+				t.Fatalf("missing %s in %s", attr, line)
+			}
+		}
+
+		if outcome == droppedOutcome && !strings.Contains(line, `reason="no event delivery for this client"`) {
+			t.Fatal(line)
+		}
+
+		if outcome == failedOutcome && !strings.Contains(line, `error="not connected to the relay: dial refused"`) {
+			t.Fatal(line)
+		}
+	}
 }
 
 func TestCheckDeliveryEchoErrors(t *testing.T) {
@@ -1611,7 +1705,7 @@ func TestCheckDeliveryEchoErrors(t *testing.T) {
 			result := callTool(t, rig, checkTool, map[string]any{})
 			want := "This client has no event delivery: awrel does not know how to deliver events to client other. " +
 				"Subscriptions are accepted but no event will arrive.\nRelay connection: connected\nRelay echo: " +
-				test.want + "\nSubscriptions: 0\nPersistence: off (no session key or AWREL_PERSIST=0)"
+				test.want + "\nSubscriptions: 0\n" + eventCountsZero + "Persistence: off (no session key or AWREL_PERSIST=0)"
 
 			if result.IsError || textOf(t, result) != want {
 				t.Fatalf("result = %+v (%q), want %q", result, textOf(t, result), want)
@@ -1621,5 +1715,58 @@ func TestCheckDeliveryEchoErrors(t *testing.T) {
 				t.Fatalf("calls = %v", calls)
 			}
 		})
+	}
+}
+
+func TestAwrelEventsLogWithoutCounting(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"echo", "self_test", "future_test"} {
+		for _, outcome := range []string{droppedOutcome, failedOutcome, deliveredOutcome} {
+			t.Run(name+"/"+outcome, func(t *testing.T) {
+				t.Parallel()
+
+				assertAwrelEventOutcome(t, name, outcome)
+			})
+		}
+	}
+}
+
+func assertAwrelEventOutcome(t *testing.T, name, outcome string) {
+	t.Helper()
+
+	logs := &syncBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}}
+	server := serverWithLogs(logs)
+
+	switch outcome {
+	case failedOutcome:
+		server.deliverer = failingDeliverer{}
+	case deliveredOutcome:
+		server.deliverer = successfulDeliverer{}
+	}
+
+	server.delivered.Store(2)
+	server.dropped.Store(3)
+	server.failed.Store(4)
+
+	event := testEvent()
+	event.Provider = serverName
+	event.Event = name
+	server.HandleEvent(t.Context(), event)
+
+	if server.delivered.Load() != 2 || server.dropped.Load() != 3 || server.failed.Load() != 4 {
+		t.Fatalf("%s %s changed counts: %d delivered, %d dropped, %d failed",
+			name, outcome, server.delivered.Load(), server.dropped.Load(), server.failed.Load())
+	}
+
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("%s %s log lines = %v", name, outcome, lines)
+	}
+
+	for _, attr := range []string{"provider=awrel", "event=" + name, "outcome=" + outcome, "delivery=d1"} {
+		if !strings.Contains(lines[0], attr) {
+			t.Fatalf("missing %s in %s", attr, lines[0])
+		}
 	}
 }

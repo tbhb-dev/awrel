@@ -57,7 +57,7 @@ repos:
       - id: conventional-commits
         name: Conventional Commits
         language: system
-        entry: .bazel_env/bin/cog verify --file
+        entry: .bazel_env/bin/cog verify --ignore-merge-commits --file
         stages: [commit-msg]
         always_run: true
       - id: shfmt

@@ -12,6 +12,7 @@ go_library(
     importpath = "go.tbhb.dev/awrel/internal/relayclient",
     visibility = ["//:__subpackages__"],
     deps = [
+        "//internal/delivery",
         "//internal/protocol",
         "//internal/transport",
     ],

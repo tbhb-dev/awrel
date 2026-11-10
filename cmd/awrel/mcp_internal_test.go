@@ -848,8 +848,8 @@ func TestSigtermStopsTheServer(t *testing.T) {
 func TestUnconnectedRelayStatus(t *testing.T) {
 	t.Parallel()
 
-	connected, count := (unconnectedRelay{err: errNoEndpoint}).Status()
-	if connected || count != 0 {
+	connected, count, gated := (unconnectedRelay{err: errNoEndpoint}).Status()
+	if gated != 0 || connected || count != 0 {
 		t.Fatalf("idle relay status = %t, %d", connected, count)
 	}
 }

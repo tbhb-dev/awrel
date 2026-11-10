@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.tbhb.dev/awrel/internal/delivery"
 	"go.tbhb.dev/awrel/internal/protocol"
 	"go.tbhb.dev/awrel/internal/transport"
 )
@@ -146,8 +147,10 @@ type Client struct {
 	ready    chan struct{}
 	mirror   []protocol.Subscription
 	opts     Options
-	nextID   atomic.Uint64
-	mu       sync.Mutex
+	// gatedEvents counts events suppressed by the gate since process start.
+	gatedEvents atomic.Uint64
+	nextID      atomic.Uint64
+	mu          sync.Mutex
 	// incompatible stops retries and suppresses all later delivery.
 	incompatible atomic.Bool
 	// replaying freezes the complete mirror while replay replies contain partial lists.
@@ -193,6 +196,7 @@ func New(opts Options) *Client {
 		nextID:       atomic.Uint64{},
 		incompatible: atomic.Bool{},
 		gated:        atomic.Int32{},
+		gatedEvents:  atomic.Uint64{},
 		replaying:    atomic.Bool{},
 		restoring:    atomic.Bool{},
 	}
@@ -296,12 +300,12 @@ func (c *Client) Echo(ctx context.Context, nonce string) error {
 	return err
 }
 
-// Status reads the connection state and subscription count without contacting the relay.
-func (c *Client) Status() (bool, int) {
+// Status reads connection state, subscription count and gated event count locally.
+func (c *Client) Status() (bool, int, uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return c.cur != nil, len(c.mirror)
+	return c.cur != nil, len(c.mirror), c.gatedEvents.Load()
 }
 
 // session dials once, resubscribes, and serves the connection until it ends.
@@ -565,14 +569,32 @@ func (c *Client) handle(ctx context.Context, msg protocol.Message) bool {
 		default:
 		}
 	case protocol.Event:
-		if c.gated.Load() == 0 && !c.incompatible.Load() {
-			c.opts.OnEvent(ctx, message)
-		}
+		c.handleEvent(ctx, message)
 	default:
 		c.opts.Logger.DebugContext(ctx, "ignored relay message", slog.Any("message", message))
 	}
 
 	return true
+}
+
+func (c *Client) handleEvent(ctx context.Context, message protocol.Event) {
+	if c.gated.Load() == 0 && !c.incompatible.Load() {
+		c.opts.OnEvent(ctx, message)
+	} else {
+		reason := "filter request pending"
+		if c.incompatible.Load() {
+			reason = "relay incompatible"
+		} else if c.replaying.Load() {
+			reason = "replay pending"
+		}
+
+		described := delivery.Describe(message)
+		if described.Counted() {
+			c.gatedEvents.Add(1)
+		}
+
+		described.Log(ctx, c.opts.Logger, "gated", "reason", reason)
+	}
 }
 
 // route hands a reply to the request waiting for requestID.
