@@ -47,6 +47,8 @@ By default the server delivers compact payloads, which reduce each payload to a 
 
 Subscriptions persist across restarts when a session key is available. A restarted server with the same key restores them from disk.
 
+On Windows, persistence is off and subscriptions last only for the session.
+
 Key lookup runs in this order:
 
 1. The `--session-id` flag.

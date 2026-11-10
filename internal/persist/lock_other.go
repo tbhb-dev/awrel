@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Tony Burns
 
-//go:build !unix && !windows
+//go:build !unix
 
 package persist
 
@@ -9,6 +9,7 @@ import "os"
 
 // flock does nothing here, since the platform has no flock. Processes that
 // share a session key can then lose each other's change on a write.
+// A Store is never opened on Windows.
 func flock(int, int) error {
 	return nil
 }

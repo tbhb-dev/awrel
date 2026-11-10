@@ -40,9 +40,10 @@ load(
     "workers_tsc_test",
     "workers_vitest_test",
 )
-load("@tbhb_rules_go//:defs.bzl", "go_arch_lint_test", "go_deadcode_test", "go_mod_tidy_test", "gobco_test", "gomutants_test", "govulncheck", "govulncheck_test")
+load("@tbhb_rules_go//:defs.bzl", "go_arch_lint_test", "go_deadcode_test", "go_mod_tidy_test", "gobco_test", "govulncheck", "govulncheck_test")
 load("@tbhb_rules_typescript//:defs.bzl", "biome_test", "depcruise_test")
 load("//:vale_packages.bzl", "VALE_PACKAGES")
+load("//tools:mutation.bzl", "gomutants_test")
 load("//tools/lint:linters.bzl", "golangci_lint_test")
 
 # gazelle:prefix go.tbhb.dev/awrel
@@ -256,6 +257,10 @@ gobco_test(
     go_mod = "go.mod",
     go_sum = "go.sum",
     proxy = "@go_mod_proxy//:proxy",
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
     tests = ["//internal/persist:persist_test"],
 )
 

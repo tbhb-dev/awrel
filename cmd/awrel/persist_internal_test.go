@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -26,13 +26,9 @@ import (
 )
 
 const (
-	sessionKey     = "key-one"
-	savedEvent     = `{"provider":"github","event":"issue_comment","repository":"o/r"}`
-	setLevelCall   = `{"jsonrpc":"2.0","id":9,"method":"logging/setLevel","params":{"level":"info"}}` + "\n"
-	harnessSession = "CLAUDE_CODE_SESSION_ID"
-	stateHome      = "XDG_STATE_HOME"
-	listCall       = `{"jsonrpc":"2.0","id":5,"method":"tools/call",` +
-		`"params":{"name":"list_subscriptions","arguments":{}}}` + "\n"
+	sessionKey = "key-one"
+	savedEvent = `{"provider":"github","event":"issue_comment","repository":"o/r"}`
+	stateHome  = "XDG_STATE_HOME"
 )
 
 // sessionRelay is a relay that can delay its answer to each subscription until
@@ -175,162 +171,11 @@ func seedFile(t *testing.T, state, key, endpoint, subscriptions string) string {
 	return path
 }
 
-func awaitSubscription(t *testing.T, relay *sessionRelay) protocol.Subscription {
-	t.Helper()
-
-	select {
-	case sub := <-relay.received:
-		return sub
-	case <-time.After(waitLimit):
-		t.Fatal("the relay received no subscribe")
-
-		return protocol.Subscription{Provider: "", Event: "", Repository: ""}
-	}
-}
-
-func TestSeededSessionDialsAtOnce(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		vars map[string]string
-		name string
-		args []string
-	}{
-		{map[string]string{}, "flag", []string{"--session-id", sessionKey}},
-		{map[string]string{persist.SessionEnv: sessionKey}, "environment", nil},
-		{map[string]string{harnessSession: sessionKey}, "harness variable", nil},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			state := t.TempDir()
-			relay := newSessionRelay(t, true)
-			path := seedFile(t, state, sessionKey, relay.url, savedEvent)
-
-			seed, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			test.vars[tokenEnv] = sentinelValue
-			test.vars[endpointEnv] = relay.url
-			test.vars[stateHome] = state
-
-			running := startSession(t, env(test.vars), 0, test.args...)
-
-			driveRestore(t, running, relay)
-
-			err = running.finish(t)
-			if err != nil {
-				t.Errorf("exit: %v", err)
-			}
-
-			checkUntouched(t, path, seed)
-		})
-	}
-}
-
-// driveRestore walks a seeded session through its restore and checks what the
-// agent sees.
-func driveRestore(t *testing.T, running *mcpRun, relay *sessionRelay) {
-	t.Helper()
-
-	// The relay sees the replay without any tool call. It delays the answer
-	// until the agent has finished its handshake and asked for logs.
-	if got := awaitSubscription(t, relay); got.Repository != "o/r" || got.Event != "issue_comment" {
-		t.Errorf("replayed %+v, want the saved subscription", got)
-	}
-
-	running.handshake(t)
-	running.send(t, setLevelCall)
-	running.await(t, false, `"id":9`)
-	close(relay.release)
-
-	running.await(t, false, `restored 1 subscription from the previous run`)
-	close(relay.push)
-	running.await(t, false, `"method":"notifications/claude/channel"`)
-
-	running.send(t, listCall)
-	running.await(t, false, `"id":5`)
-
-	out := running.out.String()
-	if !strings.Contains(out, `\"repository\":\"o/r\"`) && !strings.Contains(out, `"repository":"o/r"`) {
-		t.Errorf("list_subscriptions lacks the restored entry:\n%s", out)
-	}
-
-	if relay.dials.Load() != 1 {
-		t.Errorf("dials = %d, want 1", relay.dials.Load())
-	}
-}
-
-// checkUntouched fails the test if the file differs from seed or has a lock
-// beside it, since a process that only restores never writes or locks.
-func checkUntouched(t *testing.T, path string, seed []byte) {
-	t.Helper()
-
-	after, err := os.ReadFile(path)
-	if err != nil || !bytes.Equal(after, seed) {
-		t.Errorf("the restoring process changed the file: %s, %v", after, err)
-	}
-
-	if exists(path + ".lock") {
-		t.Error("the restoring process took the lock")
-	}
-}
-
 // exists reports whether path is there.
 func exists(path string) bool {
 	_, err := os.Stat(path)
 
 	return err == nil
-}
-
-func TestSubscribeSavesTheSubscription(t *testing.T) {
-	t.Parallel()
-
-	state := t.TempDir()
-	relay := newSessionRelay(t, false)
-	vars := map[string]string{
-		tokenEnv: sentinelValue, endpointEnv: relay.url, stateHome: state, persist.SessionEnv: sessionKey,
-	}
-
-	running := startSession(t, env(vars), 0)
-
-	running.handshake(t)
-	running.send(t, subscribeCall)
-	running.await(t, false, `"id":2`)
-
-	path := sessionFile(state, sessionKey)
-
-	deadline := time.Now().Add(waitLimit)
-
-	var data []byte
-
-	for {
-		var err error
-
-		data, err = os.ReadFile(path)
-		if err == nil {
-			break
-		}
-
-		if time.Now().After(deadline) {
-			t.Fatalf("no session file: %v\nstderr:\n%s", err, running.errOut.String())
-		}
-
-		time.Sleep(time.Millisecond)
-	}
-
-	want := `{"version":1,"endpoint":"` + relay.url + `","subscriptions":[` + savedEvent + `]}`
-	if string(data) != want {
-		t.Errorf("file = %s\nwant   %s", data, want)
-	}
-
-	err := running.finish(t)
-	if err != nil {
-		t.Errorf("exit: %v", err)
-	}
 }
 
 func TestNoKeyKeepsDialOnFirstCall(t *testing.T) {
@@ -422,5 +267,36 @@ func TestMCPCommandReportsAMissingSessionFlag(t *testing.T) {
 	err := root.ExecuteContext(t.Context())
 	if err == nil || !strings.Contains(err.Error(), sessionFlag) {
 		t.Errorf("err = %v, want a complaint about the %s flag", err, sessionFlag)
+	}
+}
+
+func TestRestoreSessionKeepsANilStoreNil(t *testing.T) {
+	t.Parallel()
+
+	store, initial := restoreSession(nil, func(*persist.Store) []protocol.Subscription {
+		t.Fatal("a nil Store was loaded")
+
+		return nil
+	})
+	if store != nil || initial != nil {
+		t.Errorf("restoreSession(nil) = %v, %v, want nil, nil", store, initial)
+	}
+}
+
+func TestRestoreSessionLoadsAnOpenedStore(t *testing.T) {
+	t.Parallel()
+
+	saved := &persist.Store{}
+	want := []protocol.Subscription{{Provider: "github", Event: "issue_comment", Repository: "o/r"}}
+
+	store, initial := restoreSession(saved, func(got *persist.Store) []protocol.Subscription {
+		if got != saved {
+			t.Fatalf("loaded Store %p, want %p", got, saved)
+		}
+
+		return want
+	})
+	if store != saved || !slices.EqualFunc(initial, want, protocol.Subscription.Equal) {
+		t.Errorf("restoreSession = %v, %v, want the opened Store and its subscriptions", store, initial)
 	}
 }

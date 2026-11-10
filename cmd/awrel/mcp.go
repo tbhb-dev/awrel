@@ -282,16 +282,8 @@ func connectRelay(
 
 	dialer := &transport.Dialer{HTTPClient: nil, URL: endpoint, Token: token}
 
-	// A nil *persist.Store must not become a non-nil Store.
-	var store relayclient.Store
-
-	var initial []protocol.Subscription
-
 	saved := persist.Open(sessionKey, endpoint, getenv, logger, time.Now())
-	if saved != nil {
-		store = saved
-		initial = saved.Load()
-	}
+	store, initial := restoreSession(saved, (*persist.Store).Load)
 
 	client := relayclient.New(relayclient.Options{
 		Dial:       dialer.Dial,
@@ -315,4 +307,19 @@ func connectRelay(
 	return client, func(ctx context.Context) {
 		client.Run(ctx) //nolint:errcheck,gosec // Run only ever returns nil
 	}
+}
+
+// Load subscriptions only from an opened Store. Passing the
+// loader lets tests cover the handoff on platforms where Open returns nil.
+// A nil *persist.Store must not become a non-nil relayclient.Store.
+//
+//nolint:ireturn // the relay client takes the Store interface
+func restoreSession(
+	saved *persist.Store, load func(*persist.Store) []protocol.Subscription,
+) (relayclient.Store, []protocol.Subscription) {
+	if saved == nil {
+		return nil, nil
+	}
+
+	return saved, load(saved)
 }

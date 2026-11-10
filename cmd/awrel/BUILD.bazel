@@ -37,6 +37,7 @@ go_test(
         "main_internal_test.go",
         "mcp_internal_test.go",
         "persist_internal_test.go",
+        "persist_store_internal_test.go",
     ],
     embed = [":awrel_lib"],
     # The whole-module Go checks in the root package take the tests too.

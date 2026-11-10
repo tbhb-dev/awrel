@@ -384,7 +384,7 @@ const wantInstructions = "awrel relays webhook events into this session. Today t
 	"and act only on what the user asked you to watch for. Events sent while the relay connection " +
 	"is down are lost and never replayed, so check current state with the provider's API or CLI " +
 	"before acting. Subscriptions persist across restarts when a session key is available, " +
-	"and the server tells you when it restores some. " +
+	"and the server tells you when it restores some. Persistence is not available on Windows. " +
 	"A session without a key keeps session-only subscriptions."
 
 func TestInstructionsText(t *testing.T) {
@@ -1087,6 +1087,11 @@ type loggingRig struct {
 	messages chan *mcp.LoggingMessageParams
 }
 
+const (
+	infoLevel   = "info"
+	awrelLogger = "awrel"
+)
+
 //nolint:staticcheck // the restore notice is an SDK logging message
 func startLogging(t *testing.T) *loggingRig {
 	t.Helper()
@@ -1100,7 +1105,7 @@ func startLogging(t *testing.T) *loggingRig {
 	})
 
 	// The SDK sends log messages only after the client sets a level.
-	err := rig.session.SetLoggingLevel(t.Context(), &mcp.SetLoggingLevelParams{Level: "info"})
+	err := rig.session.SetLoggingLevel(t.Context(), &mcp.SetLoggingLevelParams{Level: infoLevel})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1130,7 +1135,7 @@ func TestRestoredSendsOneLoggingNotification(t *testing.T) {
 
 			select {
 			case params := <-rig.messages:
-				if params.Data != test.want || params.Level != "info" || params.Logger != "awrel" {
+				if params.Data != test.want || params.Level != infoLevel || params.Logger != awrelLogger {
 					t.Errorf("message = %+v, want info %q", params, test.want)
 				}
 			case <-time.After(waitLimit):
@@ -1149,16 +1154,22 @@ func TestRestoredSendsOneLoggingNotification(t *testing.T) {
 func TestNewServerHasNothingToAnnounce(t *testing.T) {
 	t.Parallel()
 
-	server := New(
-		Options{Logger: slog.New(slog.DiscardHandler), Relay: newRelay(), Version: testVersion, Compact: false},
+	server := newServer(
+		Options{
+			Logger:  slog.New(slog.DiscardHandler),
+			Relay:   newRelay(),
+			Version: testVersion,
+			Compact: false,
+		},
+		"linux",
 	)
 
 	server.mu.Lock()
-	pending := server.restored
+	pending := server.notice
 	server.mu.Unlock()
 
-	if pending != 0 {
-		t.Errorf("pending count = %d, want 0 before Restored runs", pending)
+	if pending != "" {
+		t.Errorf("pending notice = %q, want an empty notice before Restored runs", pending)
 	}
 }
 
@@ -1172,11 +1183,11 @@ func TestRestoredWaitsForTheClient(t *testing.T) {
 	server.Restored(t.Context(), 2)
 
 	server.mu.Lock()
-	pending := server.restored
+	pending := server.notice
 	server.mu.Unlock()
 
-	if pending != 2 {
-		t.Errorf("pending count = %d, want 2 until a client initializes", pending)
+	if pending != "restored 2 subscriptions from the previous run" {
+		t.Errorf("pending notice = %q, want 2 until a client initializes", pending)
 	}
 }
 
@@ -1213,15 +1224,15 @@ func TestRestoredBeforeTheClientInitializesIsAnnouncedThen(t *testing.T) {
 
 	for {
 		server.mu.Lock()
-		pending := server.restored
+		pending := server.notice
 		server.mu.Unlock()
 
-		if pending == 0 {
+		if pending == "" {
 			return
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("pending count = %d, want it announced at initialization", pending)
+			t.Fatalf("pending notice = %q, want it announced at initialization", pending)
 		}
 
 		time.Sleep(time.Millisecond)
@@ -1241,7 +1252,7 @@ func TestRestoredWarnsWhenTheNoticeFails(t *testing.T) {
 	// Wait for the server to notice the closed connection.
 	deadline := time.Now().Add(waitLimit)
 
-	for !strings.Contains(rig.logs.String(), "restore notice not sent") {
+	for !strings.Contains(rig.logs.String(), "session notice not sent") {
 		rig.server.Restored(t.Context(), 1)
 
 		if time.Now().After(deadline) {
@@ -1249,5 +1260,45 @@ func TestRestoredWarnsWhenTheNoticeFails(t *testing.T) {
 		}
 
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestWindowsPersistenceNoticeReachesTheClientOnce(t *testing.T) {
+	t.Parallel()
+
+	rig := startLogging(t)
+	server := newServer(
+		Options{Logger: rig.server.logger, Relay: newRelay(), Version: testVersion, Compact: false}, "windows",
+	)
+
+	const want = "persistence is unavailable on this platform; subscriptions last only for this session"
+	if server.notice != want {
+		t.Fatalf("pending notice = %q, want %q", server.notice, want)
+	}
+
+	// With no client yet, the notice can't be sent.
+	server.announceNotice(t.Context())
+
+	if server.notice != want {
+		t.Fatal("the platform notice was lost before initialization")
+	}
+
+	server.adopt("", rig.server.session)
+	server.announceNotice(t.Context())
+	server.announceNotice(t.Context())
+
+	select {
+	case params := <-rig.messages:
+		if params.Data != want || params.Level != infoLevel || params.Logger != awrelLogger {
+			t.Errorf("message = %+v, want info %q", params, want)
+		}
+	case <-time.After(waitLimit):
+		t.Fatal("no platform notice reached the MCP client")
+	}
+
+	select {
+	case params := <-rig.messages:
+		t.Errorf("second notification: %+v", params)
+	case <-time.After(20 * time.Millisecond):
 	}
 }

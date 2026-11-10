@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -49,7 +50,7 @@ const Instructions = "awrel relays webhook events into this session. " +
 	"Events sent while the relay connection is down are lost and never replayed, " +
 	"so check current state with the provider's API or CLI before acting. " +
 	"Subscriptions persist across restarts when a session key is available, " +
-	"and the server tells you when it restores some. " +
+	"and the server tells you when it restores some. Persistence is not available on Windows. " +
 	"A session without a key keeps session-only subscriptions."
 
 // channelCapability is the experimental capability that makes Claude Code
@@ -145,15 +146,18 @@ type Server struct {
 	// session is the client's session, set when it has initialized.
 	session *mcp.ServerSession
 	client  string
-	// restored is the count of restored subscriptions that the agent hasn't
-	// heard about yet.
-	restored int
-	mu       sync.Mutex
-	compact  bool
+	// notice is the session notice that the agent hasn't heard yet.
+	notice  string
+	mu      sync.Mutex
+	compact bool
 }
 
 // New returns a Server that drives opts.Relay.
 func New(opts Options) *Server {
+	return newServer(opts, runtime.GOOS)
+}
+
+func newServer(opts Options, goos string) *Server {
 	server := &Server{
 		server:    nil,
 		logger:    opts.Logger,
@@ -162,9 +166,13 @@ func New(opts Options) *Server {
 		transport: nil,
 		session:   nil,
 		client:    "",
-		restored:  0,
+		notice:    "",
 		mu:        sync.Mutex{},
 		compact:   opts.Compact,
+	}
+
+	if goos == "windows" {
+		server.notice = "persistence is unavailable on this platform; subscriptions last only for this session"
 	}
 
 	server.server = mcp.NewServer(
@@ -243,11 +251,20 @@ func (s *Server) HandleEvent(ctx context.Context, event protocol.Event) {
 // previous run. The server sends one logging notification about it, at once
 // when the client has initialized, else right after it does.
 func (s *Server) Restored(ctx context.Context, count int) {
+	if count == 0 {
+		return
+	}
+
+	noun := "subscriptions"
+	if count == 1 {
+		noun = "subscription"
+	}
+
 	s.mu.Lock()
-	s.restored = count
+	s.notice = fmt.Sprintf("restored %d %s from the previous run", count, noun)
 	s.mu.Unlock()
 
-	s.announceRestored(ctx)
+	s.announceNotice(ctx)
 }
 
 // initialized runs when the client finishes the handshake. It picks the
@@ -263,37 +280,32 @@ func (s *Server) initialized(ctx context.Context, req *mcp.InitializedRequest) {
 	s.logger.InfoContext(ctx, "client initialized", "name", name)
 
 	s.adopt(name, req.Session)
-	s.announceRestored(ctx)
+	s.announceNotice(ctx)
 }
 
-// announceRestored sends the notice of Restored, once, to an initialized
-// client. The SDK sends it only if the client has set a logging level.
-func (s *Server) announceRestored(ctx context.Context) {
+// announceNotice sends a session notice once to an initialized client.
+// The SDK sends it only if the client has set a logging level.
+func (s *Server) announceNotice(ctx context.Context) {
 	s.mu.Lock()
-	session, count := s.session, s.restored
+	session, notice := s.session, s.notice
 
-	if session == nil || count == 0 {
+	if session == nil || notice == "" {
 		s.mu.Unlock()
 
 		return
 	}
 
-	s.restored = 0
+	s.notice = ""
 	s.mu.Unlock()
-
-	noun := "subscriptions"
-	if count == 1 {
-		noun = "subscription"
-	}
 
 	//nolint:staticcheck // SDK logging is the notification the design calls for
 	err := session.Log(ctx, &mcp.LoggingMessageParams{
 		Level:  "info",
 		Logger: "awrel",
-		Data:   fmt.Sprintf("restored %d %s from the previous run", count, noun),
+		Data:   notice,
 	})
 	if err != nil {
-		s.logger.WarnContext(ctx, "restore notice not sent", "error", err)
+		s.logger.WarnContext(ctx, "session notice not sent", "error", err)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"time"
 
@@ -92,11 +93,23 @@ type Store struct {
 
 // Open returns the Store for the session key and the relay endpoint, after it
 // refreshes the session's own file and prunes old session files. It returns nil when persistence is off, when the
-// key is empty, or when no state directory can be found. In the last case it
+// key is empty, on Windows, or when no state directory can be found. In the last case it
 // logs a warning.
 func Open(
 	key, endpoint string, getenv func(string) string, logger *slog.Logger, now time.Time,
 ) *Store {
+	return open(runtime.GOOS, key, endpoint, getenv, logger, now)
+}
+
+func open(
+	goos, key, endpoint string, getenv func(string) string, logger *slog.Logger, now time.Time,
+) *Store {
+	if goos == "windows" {
+		logger.Info("subscriptions last only for this session on this platform")
+
+		return nil
+	}
+
 	if key == "" || getenv(PersistEnv) == "0" {
 		return nil
 	}
@@ -141,7 +154,7 @@ func newStore(dir, key, endpoint string, logger *slog.Logger) *Store {
 		createTemp: os.CreateTemp,
 		chtimes:    os.Chtimes,
 		mkdirAll:   os.MkdirAll,
-		rename:     rename,
+		rename:     os.Rename,
 		flock:      flock,
 		write:      writeAll,
 		path:       filepath.Join(dir, hex.EncodeToString(sum[:])+fileSuffix),

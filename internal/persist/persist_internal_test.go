@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Tony Burns
 
+//go:build !windows
+
 package persist
 
 import (
@@ -202,7 +204,7 @@ func TestOpen(t *testing.T) {
 		t.Parallel()
 
 		logger, _ := newLogs()
-		if Open("", testEndpoint, env(map[string]string{stateEnv: t.TempDir()}), logger, now) != nil {
+		if open("linux", "", testEndpoint, env(map[string]string{stateEnv: t.TempDir()}), logger, now) != nil {
 			t.Error("Open without a key returned a Store")
 		}
 	})
@@ -218,7 +220,7 @@ func TestOpen(t *testing.T) {
 		logger, _ := newLogs()
 		vars := map[string]string{PersistEnv: "0", stateEnv: state}
 
-		if Open(testKey, testEndpoint, env(vars), logger, now) != nil {
+		if open("linux", testKey, testEndpoint, env(vars), logger, now) != nil {
 			t.Error("Open with AWREL_PERSIST=0 returned a Store")
 		}
 
@@ -232,7 +234,7 @@ func TestOpen(t *testing.T) {
 		t.Parallel()
 
 		logger, logs := newLogs()
-		if Open(testKey, testEndpoint, env(map[string]string{}), logger, now) != nil {
+		if open("linux", testKey, testEndpoint, env(map[string]string{}), logger, now) != nil {
 			t.Error("Open without a state directory returned a Store")
 		}
 
@@ -253,7 +255,7 @@ func TestOpen(t *testing.T) {
 
 		vars := map[string]string{PersistEnv: "1", stateEnv: state}
 
-		store := Open(testKey, testEndpoint, env(vars), logger, now)
+		store := open("linux", testKey, testEndpoint, env(vars), logger, now)
 		if store == nil {
 			t.Fatal("Open returned no Store")
 		}
