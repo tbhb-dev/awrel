@@ -204,9 +204,15 @@ func TestOpen(t *testing.T) {
 		t.Parallel()
 
 		logger, _ := newLogs()
-		if open("linux", "", testEndpoint, env(map[string]string{stateEnv: t.TempDir()}), logger, now) != nil {
-			t.Error("Open without a key returned a Store")
-		}
+		store, status := open(
+			"linux",
+			"",
+			testEndpoint,
+			env(map[string]string{stateEnv: t.TempDir()}),
+			logger,
+			now,
+		)
+		assertOff(t, store, status)
 	})
 
 	t.Run("opted out", func(t *testing.T) {
@@ -220,9 +226,15 @@ func TestOpen(t *testing.T) {
 		logger, _ := newLogs()
 		vars := map[string]string{PersistEnv: "0", stateEnv: state}
 
-		if open("linux", testKey, testEndpoint, env(vars), logger, now) != nil {
-			t.Error("Open with AWREL_PERSIST=0 returned a Store")
-		}
+		store, status := open(
+			"linux",
+			testKey,
+			testEndpoint,
+			env(vars),
+			logger,
+			now,
+		)
+		assertOff(t, store, status)
 
 		_, err := os.Stat(stale)
 		if err != nil {
@@ -234,9 +246,15 @@ func TestOpen(t *testing.T) {
 		t.Parallel()
 
 		logger, logs := newLogs()
-		if open("linux", testKey, testEndpoint, env(map[string]string{}), logger, now) != nil {
-			t.Error("Open without a state directory returned a Store")
-		}
+		store, status := open(
+			"linux",
+			testKey,
+			testEndpoint,
+			env(map[string]string{}),
+			logger,
+			now,
+		)
+		assertOff(t, store, status)
 
 		if !strings.Contains(logs.String(), "not saved") {
 			t.Errorf("no warning:\n%s", logs.String())
@@ -255,9 +273,9 @@ func TestOpen(t *testing.T) {
 
 		vars := map[string]string{PersistEnv: "1", stateEnv: state}
 
-		store := open("linux", testKey, testEndpoint, env(vars), logger, now)
-		if store == nil {
-			t.Fatal("Open returned no Store")
+		store, status := open("linux", testKey, testEndpoint, env(vars), logger, now)
+		if store == nil || status != wantSaved {
+			t.Fatalf("Open = (%v, %q), want an open Store and saved for this session key", store, status)
 		}
 
 		_, err := os.Stat(stale)
@@ -275,9 +293,9 @@ func TestOpenKeepsItsOwnOldFile(t *testing.T) {
 	vars := env(map[string]string{stateEnv: state})
 	logger, logs := newLogs()
 
-	first := Open(testKey, testEndpoint, vars, logger, now)
-	if first == nil {
-		t.Fatal("Open returned no Store")
+	first, status := Open(testKey, testEndpoint, vars, logger, now)
+	if first == nil || status != wantSaved {
+		t.Fatalf("Open = (%v, %q), want an open Store and saved for this session key", first, status)
 	}
 
 	first.flock = boundedFlock
@@ -292,9 +310,9 @@ func TestOpenKeepsItsOwnOldFile(t *testing.T) {
 	age(t, first.path, now)
 	age(t, otherFile, now)
 
-	second := Open(testKey, testEndpoint, vars, logger, now)
-	if second == nil {
-		t.Fatal("Open returned no Store")
+	second, status := Open(testKey, testEndpoint, vars, logger, now)
+	if second == nil || status != wantSaved {
+		t.Fatalf("Open = (%v, %q), want an open Store and saved for this session key", second, status)
 	}
 
 	if got := second.Load(); !sameSubs(got, sub("push", "o/r")) {
@@ -1109,5 +1127,13 @@ func TestHarnessDetectionList(t *testing.T) {
 
 	if got := harnessEnvs(); !slices.Equal(got, []string{harnessVar}) {
 		t.Errorf("harnessEnvs = %v", got)
+	}
+}
+
+func assertOff(t *testing.T, store *Store, status string) {
+	t.Helper()
+
+	if store != nil || status != wantOff {
+		t.Errorf("Open = (%v, %q), want (nil, %q)", store, status, wantOff)
 	}
 }

@@ -12,16 +12,21 @@ import (
 	"time"
 )
 
+const (
+	wantSaved = "saved for this session key"
+	wantOff   = "off (no session key or AWREL_PERSIST=0)"
+)
+
 func TestWindowsPlatformKeepsSubscriptionsInTheSession(t *testing.T) {
 	t.Parallel()
 
-	checkSessionOnly(t, func(getenv func(string) string, logger *slog.Logger) *Store {
+	checkSessionOnly(t, func(getenv func(string) string, logger *slog.Logger) (*Store, string) {
 		return open("windows", "valid-session-key", "wss://relay.example/connect", getenv, logger, time.Now())
 	})
 }
 
 // checkSessionOnly verifies both the platform decision and its explanation.
-func checkSessionOnly(t *testing.T, openStore func(func(string) string, *slog.Logger) *Store) {
+func checkSessionOnly(t *testing.T, openStore func(func(string) string, *slog.Logger) (*Store, string)) {
 	t.Helper()
 
 	state := t.TempDir()
@@ -37,8 +42,8 @@ func checkSessionOnly(t *testing.T, openStore func(func(string) string, *slog.Lo
 		return ""
 	}
 
-	if got := openStore(getenv, logger); got != nil {
-		t.Fatal("persistence returned a Store on Windows")
+	if got, status := openStore(getenv, logger); got != nil || status != "unavailable on this platform" {
+		t.Fatalf("Open = (%v, %q), want (nil, unavailable on this platform)", got, status)
 	}
 
 	if got := logs.String(); strings.Count(got, "\n") != 1 ||
@@ -59,9 +64,9 @@ func checkSessionOnly(t *testing.T, openStore func(func(string) string, *slog.Lo
 func TestLinuxPlatformOpensTheStore(t *testing.T) {
 	t.Parallel()
 
-	store := open("linux", "valid-session-key", "wss://relay.example/connect",
+	store, status := open("linux", "valid-session-key", "wss://relay.example/connect",
 		func(string) string { return t.TempDir() }, slog.New(slog.DiscardHandler), time.Now())
-	if store == nil {
-		t.Fatal("persistence returned no Store on Linux")
+	if store == nil || status != wantSaved {
+		t.Fatalf("Open = (%v, %q), want an open Store and saved for this session key", store, status)
 	}
 }

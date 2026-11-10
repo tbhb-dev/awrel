@@ -191,7 +191,16 @@ func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTi
 				return err //nolint:wrapcheck // pflag's message names the flag
 			}
 
-			return serveMCP(cmd, stdin, endpoint, compact, persist.Key(sessionID, getenv), getenv, requestTimeout)
+			return serveMCP(
+				cmd,
+				stdin,
+				endpoint,
+				compact,
+				persist.Key(sessionID, getenv),
+				getenv,
+				requestTimeout,
+				connectRelay,
+			)
 		},
 	}
 	cmd.Flags().
@@ -203,11 +212,18 @@ func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTi
 	return cmd
 }
 
+// relayConnector supplies the tools' relay and its connection loop. Tests can
+// inject restore notifications without opening a platform-specific Store.
+type relayConnector func(
+	context.Context, *slog.Logger, string, *persist.Store, func(string) string, time.Duration,
+	func(context.Context, protocol.Event), func(context.Context, int),
+) (mcpserver.Relay, func(context.Context))
+
 // serveMCP runs the MCP server on stdin and stdout until the input ends or a
 // signal arrives, and the relay connection alongside it.
 func serveMCP(
 	cmd *cobra.Command, stdin io.Reader, endpoint string, compact bool, sessionKey string,
-	getenv func(string) string, requestTimeout time.Duration,
+	getenv func(string) string, requestTimeout time.Duration, connect relayConnector,
 ) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -216,11 +232,13 @@ func serveMCP(
 
 	var server *mcpserver.Server
 
-	relay, run := connectRelay(
+	saved, persistence := persist.Open(sessionKey, endpoint, getenv, logger, time.Now())
+
+	relay, run := connect(
 		ctx,
 		logger,
 		endpoint,
-		sessionKey,
+		saved,
 		getenv,
 		requestTimeout,
 		func(ctx context.Context, event protocol.Event) {
@@ -231,10 +249,11 @@ func serveMCP(
 		},
 	)
 	server = mcpserver.New(mcpserver.Options{
-		Logger:  logger,
-		Relay:   relay,
-		Version: buildmeta.Get().Version,
-		Compact: compact,
+		Persistence: persistence,
+		Logger:      logger,
+		Relay:       relay,
+		Version:     buildmeta.Get().Version,
+		Compact:     compact,
 	})
 
 	relayCtx, cancelRelay := context.WithCancel(ctx)
@@ -258,14 +277,15 @@ func serveMCP(
 
 // connectRelay returns the Relay for the tools and the function that keeps its
 // connection. If the endpoint or the token is missing, the Relay fails every call and the
-// function returns at once. A session key makes it save the subscriptions
+// function returns at once. An open Store makes it save the subscriptions
 // and restore the saved ones, and it reports how many through the restored callback.
 //
-//nolint:ireturn // the tools take the Relay interface
+//nolint:ireturn,dupl // the tools take the Relay interface; tests inject the same signature
 func connectRelay(
 	ctx context.Context,
 	logger *slog.Logger,
-	endpoint, sessionKey string,
+	endpoint string,
+	saved *persist.Store,
 	getenv func(string) string,
 	requestTimeout time.Duration,
 	onEvent func(context.Context, protocol.Event),
@@ -286,7 +306,6 @@ func connectRelay(
 
 	dialer := &transport.Dialer{HTTPClient: nil, URL: endpoint, Token: token}
 
-	saved := persist.Open(sessionKey, endpoint, getenv, logger, time.Now())
 	store, initial := restoreSession(saved, (*persist.Store).Load)
 
 	client := relayclient.New(relayclient.Options{

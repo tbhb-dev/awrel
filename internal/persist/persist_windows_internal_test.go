@@ -14,7 +14,7 @@ import (
 func TestOpenKeepsSubscriptionsInTheSessionOnWindows(t *testing.T) {
 	t.Parallel()
 
-	checkSessionOnly(t, func(getenv func(string) string, logger *slog.Logger) *Store {
+	checkSessionOnly(t, func(getenv func(string) string, logger *slog.Logger) (*Store, string) {
 		return Open("valid-session-key", "wss://relay.example/connect", getenv, logger, time.Now())
 	})
 }

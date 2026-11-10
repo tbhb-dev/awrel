@@ -27,6 +27,7 @@ import (
 )
 
 const (
+	persistenceOff  = "off (no session key or AWREL_PERSIST=0)"
 	testVersion     = "v-test"
 	claudeCode      = "claude-code"
 	otherName       = "other"
@@ -190,7 +191,15 @@ func startClient(t *testing.T, name string, relay *stubRelay, compact bool, clie
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{
 		AddSource: false, Level: slog.LevelDebug, ReplaceAttr: nil,
 	}))
-	server := New(Options{Logger: logger, Relay: relay, Version: testVersion, Compact: compact})
+	server := New(
+		Options{
+			Persistence: persistenceOff,
+			Logger:      logger,
+			Relay:       relay,
+			Version:     testVersion,
+			Compact:     compact,
+		},
+	)
 
 	serverEnd, clientEnd := mcp.NewInMemoryTransports()
 
@@ -748,9 +757,7 @@ func TestHandleEventLogsFailedDelivery(t *testing.T) {
 	t.Parallel()
 
 	logs := &syncBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}}
-	server := New(
-		Options{Logger: slog.New(slog.NewTextHandler(logs, nil)), Relay: newRelay(), Version: "", Compact: false},
-	)
+	server := serverWithLogs(logs)
 	server.deliverer = failingDeliverer{}
 
 	server.HandleEvent(t.Context(), testEvent())
@@ -775,9 +782,7 @@ func rawSession(t *testing.T) *pipes {
 	inReader, inWriter := io.Pipe()
 	outReader, outWriter := io.Pipe()
 	logs := &syncBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}}
-	server := New(
-		Options{Logger: slog.New(slog.NewTextHandler(logs, nil)), Relay: newRelay(), Version: "", Compact: false},
-	)
+	server := serverWithLogs(logs)
 	done := make(chan error, 1)
 
 	go func() { done <- server.Serve(t.Context(), inReader, outWriter) }()
@@ -875,7 +880,15 @@ func (failingTransport) Connect(context.Context) (mcp.Connection, error) { //nol
 func TestRunReportsAFailedConnect(t *testing.T) {
 	t.Parallel()
 
-	server := New(Options{Logger: slog.New(slog.DiscardHandler), Relay: newRelay(), Version: "", Compact: false})
+	server := New(
+		Options{
+			Persistence: persistenceOff,
+			Logger:      slog.New(slog.DiscardHandler),
+			Relay:       newRelay(),
+			Version:     "",
+			Compact:     false,
+		},
+	)
 
 	err := server.Run(t.Context(), failingTransport{})
 	if !errors.Is(err, errNotConnected) || !strings.HasPrefix(err.Error(), "run MCP server: ") {
@@ -1148,6 +1161,10 @@ func TestRestoredSendsOneLoggingNotification(t *testing.T) {
 			// A second call has no count left to announce.
 			rig.server.Restored(t.Context(), 0)
 
+			if strings.Contains(rig.logs.String(), "session notice not sent") {
+				t.Fatalf("successful notice logged a warning:\n%s", rig.logs.String())
+			}
+
 			select {
 			case params := <-rig.messages:
 				if params.Data != test.want || params.Level != infoLevel || params.Logger != awrelLogger {
@@ -1169,14 +1186,14 @@ func TestRestoredSendsOneLoggingNotification(t *testing.T) {
 func TestNewServerHasNothingToAnnounce(t *testing.T) {
 	t.Parallel()
 
-	server := newServer(
+	server := New(
 		Options{
-			Logger:  slog.New(slog.DiscardHandler),
-			Relay:   newRelay(),
-			Version: testVersion,
-			Compact: false,
+			Persistence: persistenceOff,
+			Logger:      slog.New(slog.DiscardHandler),
+			Relay:       newRelay(),
+			Version:     testVersion,
+			Compact:     false,
 		},
-		"linux",
 	)
 
 	server.mu.Lock()
@@ -1192,7 +1209,13 @@ func TestRestoredWaitsForTheClient(t *testing.T) {
 	t.Parallel()
 
 	server := New(
-		Options{Logger: slog.New(slog.DiscardHandler), Relay: newRelay(), Version: testVersion, Compact: false},
+		Options{
+			Persistence: persistenceOff,
+			Logger:      slog.New(slog.DiscardHandler),
+			Relay:       newRelay(),
+			Version:     testVersion,
+			Compact:     false,
+		},
 	)
 
 	server.Restored(t.Context(), 2)
@@ -1211,10 +1234,11 @@ func TestRestoredBeforeTheClientInitializesIsAnnouncedThen(t *testing.T) {
 
 	logs := &syncBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}}
 	server := New(Options{
-		Logger:  slog.New(slog.NewTextHandler(logs, nil)),
-		Relay:   newRelay(),
-		Version: testVersion,
-		Compact: false,
+		Persistence: persistenceOff,
+		Logger:      slog.New(slog.NewTextHandler(logs, nil)),
+		Relay:       newRelay(),
+		Version:     testVersion,
+		Compact:     false,
 	})
 
 	server.Restored(t.Context(), 2)
@@ -1282,8 +1306,14 @@ func TestWindowsPersistenceNoticeReachesTheClientOnce(t *testing.T) {
 	t.Parallel()
 
 	rig := startLogging(t)
-	server := newServer(
-		Options{Logger: rig.server.logger, Relay: newRelay(), Version: testVersion, Compact: false}, "windows",
+	server := New(
+		Options{
+			Persistence: "unavailable on this platform",
+			Logger:      rig.server.logger,
+			Relay:       newRelay(),
+			Version:     testVersion,
+			Compact:     false,
+		},
 	)
 
 	const want = "persistence is unavailable on this platform; subscriptions last only for this session"
@@ -1439,7 +1469,7 @@ func assertSelfTest(t *testing.T, raw json.RawMessage, text, previous string, ea
 		". If an event with that delivery id does not reach this session within this turn, " +
 		"this session is not receiving awrel events, even though subscriptions are accepted. " +
 		"Check the client's settings for receiving server notifications, then reconnect.\n" +
-		"Relay connection: connected\nSubscriptions: 2"
+		"Relay connection: connected\nSubscriptions: 2\nPersistence: off (no session key or AWREL_PERSIST=0)"
 	if text != want {
 		t.Fatalf("result = %q, want %q", text, want)
 	}
@@ -1449,6 +1479,33 @@ func assertSelfTest(t *testing.T, raw json.RawMessage, text, previous string, ea
 	return nonce
 }
 
+func TestCheckDeliveryPersistenceStates(t *testing.T) {
+	t.Parallel()
+
+	for _, state := range []string{
+		"saved for this session key",
+		"off (no session key or AWREL_PERSIST=0)",
+		"unavailable on this platform",
+	} {
+		t.Run(state, func(t *testing.T) {
+			t.Parallel()
+
+			server := New(Options{
+				Persistence: state,
+				Logger:      slog.New(slog.DiscardHandler), Relay: newRelay(), Version: testVersion, Compact: false,
+			})
+			result, _, err := server.checkDelivery(t.Context(), nil, ListArgs{})
+			want := "This client has no event delivery: awrel does not know how to deliver events to client . " +
+				"Subscriptions are accepted but no event will arrive.\n" +
+				"Relay connection: not connected\nSubscriptions: 0\nPersistence: " + state
+
+			if err != nil || result.IsError || textOf(t, result) != want {
+				t.Fatalf("check_delivery = %+v, %v; want %q", result, err, want)
+			}
+		})
+	}
+}
+
 func TestCheckDeliveryWithoutDeliverer(t *testing.T) {
 	t.Parallel()
 
@@ -1456,7 +1513,8 @@ func TestCheckDeliveryWithoutDeliverer(t *testing.T) {
 	rig := start(t, otherName, relay)
 	result := callTool(t, rig, checkTool, map[string]any{})
 	want := "This client has no event delivery: awrel does not know how to deliver events to client other. " +
-		"Subscriptions are accepted but no event will arrive.\nRelay connection: not connected\nSubscriptions: 0"
+		"Subscriptions are accepted but no event will arrive.\n" +
+		"Relay connection: not connected\nSubscriptions: 0\nPersistence: off (no session key or AWREL_PERSIST=0)"
 
 	if result.IsError || textOf(t, result) != want {
 		t.Fatalf("result = %+v (%q)", result, textOf(t, result))
@@ -1482,9 +1540,18 @@ func TestCheckDeliveryFailure(t *testing.T) {
 	rig.server.mu.Unlock()
 	result := callTool(t, rig, checkTool, map[string]any{})
 	want := "Failed to send a self-test event: not connected to the relay: dial refused\n" +
-		"Relay connection: not connected\nSubscriptions: 0"
+		"Relay connection: not connected\nSubscriptions: 0\nPersistence: off (no session key or AWREL_PERSIST=0)"
 
 	if result.IsError || textOf(t, result) != want {
 		t.Fatalf("result = %+v (%q)", result, textOf(t, result))
 	}
+}
+
+// serverWithLogs creates an unconnected server whose persistence is off on every OS.
+func serverWithLogs(logs *syncBuffer) *Server {
+	return New(Options{
+		Persistence: persistenceOff,
+		Logger:      slog.New(slog.NewTextHandler(logs, nil)),
+		Relay:       newRelay(), Version: "", Compact: false,
+	})
 }

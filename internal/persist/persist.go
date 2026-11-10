@@ -94,31 +94,31 @@ type Store struct {
 // Open returns the Store for the session key and the relay endpoint, after it
 // refreshes the session's own file and prunes old session files. It returns nil when persistence is off, when the
 // key is empty, on Windows, or when no state directory can be found. In the last case it
-// logs a warning.
+// logs a warning. The second result describes the persistence state for this session.
 func Open(
 	key, endpoint string, getenv func(string) string, logger *slog.Logger, now time.Time,
-) *Store {
+) (*Store, string) {
 	return open(runtime.GOOS, key, endpoint, getenv, logger, now)
 }
 
 func open(
 	goos, key, endpoint string, getenv func(string) string, logger *slog.Logger, now time.Time,
-) *Store {
+) (*Store, string) {
 	if goos == "windows" {
 		logger.Info("subscriptions last only for this session on this platform")
 
-		return nil
+		return nil, "unavailable on this platform"
 	}
 
 	if key == "" || getenv(PersistEnv) == "0" {
-		return nil
+		return nil, "off (no session key or AWREL_PERSIST=0)"
 	}
 
 	dir, err := stateDir(getenv)
 	if err != nil {
 		logger.Warn("session subscriptions not saved", slog.Any("error", err))
 
-		return nil
+		return nil, "off (no session key or AWREL_PERSIST=0)"
 	}
 
 	store := newStore(dir, key, endpoint, logger)
@@ -127,7 +127,7 @@ func open(
 	store.touch(now)
 	Prune(dir, now, logger)
 
-	return store
+	return store, "saved for this session key"
 }
 
 // stateDir is $XDG_STATE_HOME/awrel/sessions, with ~/.local/state when

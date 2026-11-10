@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"runtime"
 	"sync"
 	"time"
 
@@ -58,7 +57,10 @@ const Instructions = "awrel relays webhook events into this session. " +
 
 // channelCapability is the experimental capability that makes Claude Code
 // treat this server as a channel.
-const channelCapability = "claude/channel"
+const (
+	channelCapability = "claude/channel"
+	serverName        = "awrel"
+)
 
 // errNoConnection means Notify ran before the transport connected.
 var errNoConnection = errors.New("no MCP connection")
@@ -81,9 +83,11 @@ type Relay interface {
 
 // Options configure a Server.
 type Options struct {
-	Logger  *slog.Logger
-	Relay   Relay
-	Version string
+	// Persistence describes the outcome of opening the session Store.
+	Persistence string
+	Logger      *slog.Logger
+	Relay       Relay
+	Version     string
 	// Compact delivers events with compact payloads.
 	Compact bool
 }
@@ -149,8 +153,9 @@ type Server struct {
 	deliverer delivery.Deliverer
 	transport *notifyingTransport
 	// session is the client's session, set when it has initialized.
-	session *mcp.ServerSession
-	client  string
+	session     *mcp.ServerSession
+	client      string
+	persistence string
 	// notice is the session notice that the agent hasn't heard yet.
 	notice  string
 	mu      sync.Mutex
@@ -159,29 +164,26 @@ type Server struct {
 
 // New returns a Server that drives opts.Relay.
 func New(opts Options) *Server {
-	return newServer(opts, runtime.GOOS)
-}
-
-func newServer(opts Options, goos string) *Server {
 	server := &Server{
-		server:    nil,
-		logger:    opts.Logger,
-		relay:     opts.Relay,
-		deliverer: nil,
-		transport: nil,
-		session:   nil,
-		client:    "",
-		notice:    "",
-		mu:        sync.Mutex{},
-		compact:   opts.Compact,
+		server:      nil,
+		logger:      opts.Logger,
+		relay:       opts.Relay,
+		deliverer:   nil,
+		transport:   nil,
+		session:     nil,
+		client:      "",
+		persistence: opts.Persistence,
+		notice:      "",
+		mu:          sync.Mutex{},
+		compact:     opts.Compact,
 	}
 
-	if goos == "windows" {
+	if opts.Persistence == "unavailable on this platform" {
 		server.notice = "persistence is unavailable on this platform; subscriptions last only for this session"
 	}
 
 	server.server = mcp.NewServer(
-		&mcp.Implementation{Name: "awrel", Version: opts.Version},
+		&mcp.Implementation{Name: serverName, Version: opts.Version},
 		&mcp.ServerOptions{
 			Instructions: Instructions,
 			Capabilities: &mcp.ServerCapabilities{
@@ -311,7 +313,7 @@ func (s *Server) announceNotice(ctx context.Context) {
 	//nolint:staticcheck // SDK logging is the notification the design calls for
 	err := session.Log(ctx, &mcp.LoggingMessageParams{
 		Level:  "info",
-		Logger: "awrel",
+		Logger: serverName,
 		Data:   notice,
 	})
 	if err != nil {
@@ -421,7 +423,7 @@ func (s *Server) checkDelivery(
 	} else {
 		nonce := rand.Text()
 		event := protocol.Event{
-			Provider:   "awrel",
+			Provider:   serverName,
 			Event:      "self_test",
 			Delivery:   nonce,
 			Repository: nil,
@@ -448,7 +450,7 @@ func (s *Server) checkDelivery(
 		state = "connected"
 	}
 
-	message += fmt.Sprintf("\nRelay connection: %s\nSubscriptions: %d", state, count)
+	message += fmt.Sprintf("\nRelay connection: %s\nSubscriptions: %d\nPersistence: %s", state, count, s.persistence)
 
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: message}}}, nil, nil
 }

@@ -43,6 +43,7 @@ go_test(
     # The whole-module Go checks in the root package take the tests too.
     visibility = ["//:__pkg__"],
     deps = [
+        "//internal/mcpserver",
         "//internal/persist",
         "//internal/protocol",
         "@com_github_coder_websocket//:websocket",

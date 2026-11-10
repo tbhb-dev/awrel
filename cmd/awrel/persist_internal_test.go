@@ -8,6 +8,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +23,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/spf13/cobra"
 
+	"go.tbhb.dev/awrel/internal/mcpserver"
 	"go.tbhb.dev/awrel/internal/persist"
 	"go.tbhb.dev/awrel/internal/protocol"
 )
@@ -300,3 +303,55 @@ func TestRestoreSessionLoadsAnOpenedStore(t *testing.T) {
 		t.Errorf("restoreSession = %v, %v, want the opened Store and its subscriptions", store, initial)
 	}
 }
+
+func TestServeMCPAnnouncesInjectedRestore(t *testing.T) {
+	t.Parallel()
+
+	reader, writer := io.Pipe()
+	running := &mcpRun{
+		in: writer, out: newLockedBuffer(), errOut: newLockedBuffer(),
+		done: make(chan error, 1), cancel: nil,
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	running.cancel = cancel
+	t.Cleanup(cancel)
+	t.Cleanup(func() { ignore(writer.Close()) })
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(ctx)
+	cmd.SetOut(running.out)
+	cmd.SetErr(running.errOut)
+
+	restored := make(chan struct{})
+	//nolint:dupl // the injected connector must match the production signature
+	connect := func(
+		_ context.Context, _ *slog.Logger, _ string, _ *persist.Store, _ func(string) string, _ time.Duration,
+		_ func(context.Context, protocol.Event), onRestored func(context.Context, int),
+	) (mcpserver.Relay, func(context.Context)) {
+		return unconnectedRelay{err: errNoEndpoint}, func(ctx context.Context) {
+			select {
+			case <-restored:
+				onRestored(ctx, 2)
+			case <-ctx.Done():
+			}
+		}
+	}
+	go func() {
+		running.done <- serveMCP(cmd, reader, "", false, "", env(nil), 0, connect)
+
+		ignore(reader.Close())
+	}()
+
+	running.handshake(t)
+	running.send(t, setLoggingLevelCall)
+	running.await(t, false, `"id":9`)
+	close(restored)
+	running.await(t, false, "restored 2 subscriptions from the previous run")
+
+	err := running.finish(t)
+	if err != nil {
+		t.Fatalf("exit: %v", err)
+	}
+}
+
+const setLoggingLevelCall = `{"jsonrpc":"2.0","id":9,"method":"logging/setLevel","params":{"level":"info"}}` + "\n"
