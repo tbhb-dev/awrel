@@ -13,6 +13,13 @@ export interface RelayEvent {
   readonly payload: unknown;
 }
 
+/** Serializes both published events and socket echoes. */
+function eventFrame(
+  event: RelayEvent | Omit<RelayEvent, "repository">,
+): string {
+  return JSON.stringify({ type: "event", ...event });
+}
+
 /**
  * A connection's WebSocket attachment. It is stored with the socket, so the
  * subscriptions survive the Durable Object hibernating.
@@ -103,6 +110,19 @@ export class Relay extends DurableObject {
         return;
       }
     }
+    if ("echo" in outcome) {
+      ws.send(
+        eventFrame({
+          provider: "awrel",
+          event: "echo",
+          delivery: outcome.echo,
+          payload: {
+            echo: outcome.echo,
+            relay_received_at: new Date().toISOString(),
+          },
+        }),
+      );
+    }
     ws.send(JSON.stringify(outcome.reply));
   }
 
@@ -111,7 +131,7 @@ export class Relay extends DurableObject {
    * returns how many connections it reached.
    */
   publish(event: RelayEvent): number {
-    const message = JSON.stringify({ type: "event", ...event });
+    const message = eventFrame(event);
     const fields = filterFields(event);
     let reached = 0;
     for (const socket of this.ctx.getWebSockets()) {

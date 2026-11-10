@@ -776,3 +776,87 @@ describe("filter identity and replies", () => {
     ).toStrictEqual({ reply: limit("i"), next: null });
   });
 });
+
+describe("echo", () => {
+  it.each(["a", "z", "A", "Z", "0", "9", "_", "-", "a".repeat(64)])(
+    "accepts nonce %s without changing subscriptions",
+    (nonce) => {
+      const current = [GITHUB];
+      expect(
+        handle(current, JSON.stringify({ type: "echo", id: "e", nonce })),
+      ).toStrictEqual({
+        reply: { type: "echoed", id: "e" },
+        next: null,
+        echo: nonce,
+      });
+      expect(current).toStrictEqual([GITHUB]);
+    },
+  );
+
+  it.each([
+    undefined,
+    null,
+    1,
+    [],
+    {},
+    "",
+    "a".repeat(65),
+    "!a",
+    "a!",
+    "a b",
+    "a\\b",
+    "a\nb",
+    "é",
+    "a\n",
+  ])("rejects nonce %j with the request id", (nonce) => {
+    expect(
+      handle([], JSON.stringify({ type: "echo", id: "e", nonce })),
+    ).toStrictEqual(
+      error("e", "bad_message", "nonce must match ^[A-Za-z0-9_-]{1,64}$"),
+    );
+  });
+
+  it.each([undefined, null, 1, "", "x".repeat(65)])("rejects id %j", (id) => {
+    expect(
+      handle([], JSON.stringify({ type: "echo", id, nonce: "n" })),
+    ).toStrictEqual(
+      error(null, "bad_message", "id must be a string of 1 to 64 characters"),
+    );
+  });
+
+  it("accepts the longest id and ignores extra fields", () => {
+    expect(
+      handle(
+        [],
+        JSON.stringify({
+          type: "echo",
+          id: "i".repeat(64),
+          nonce: "n",
+          subscription_filters: true,
+          extra: 1,
+        }),
+      ),
+    ).toStrictEqual({
+      reply: { type: "echoed", id: "i".repeat(64) },
+      next: null,
+      echo: "n",
+    });
+  });
+
+  it("applies the message byte cap to echo", () => {
+    const request = { type: "echo", id: "e", nonce: "n", pad: "" };
+    const size = JSON.stringify(request).length;
+    expect(
+      handle([], JSON.stringify({ ...request, pad: "a".repeat(4096 - size) })),
+    ).toStrictEqual({
+      reply: { type: "echoed", id: "e" },
+      next: null,
+      echo: "n",
+    });
+    expect(
+      handle([], JSON.stringify({ ...request, pad: "a".repeat(4097 - size) })),
+    ).toStrictEqual(
+      error(null, "bad_message", "messages must be at most 4096 bytes"),
+    );
+  });
+});

@@ -9,10 +9,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -96,6 +98,12 @@ func (r *stubRelay) List(context.Context) ([]protocol.Subscription, error) {
 	r.record("list")
 
 	return r.subs, r.err
+}
+
+func (r *stubRelay) Echo(_ context.Context, nonce string) error {
+	r.record("echo " + nonce)
+
+	return r.err
 }
 
 func (r *stubRelay) Status() (bool, int, uint64) {
@@ -414,7 +422,7 @@ const wantInstructions = "awrel relays webhook events into this session. Today t
 	"before acting. Subscriptions persist across restarts when a session key is available, " +
 	"and the server tells you when it restores some. Persistence is not available on Windows. " +
 	"A session without a key keeps session-only subscriptions.\n\n" +
-	"After a restart or reconnect, call check_delivery and confirm its event arrives."
+	"After a restart or reconnect, call check_delivery and confirm both events arrive: self_test and echo."
 
 func TestInstructionsText(t *testing.T) {
 	t.Parallel()
@@ -1386,11 +1394,34 @@ func assertDeliveryRoundTrips(t *testing.T, compact bool) {
 		}
 
 		raw := selfTestNotification(t, rig)
-		previous = assertSelfTest(t, raw, textOf(t, result), previous, sentAt, compact)
+		text := textOf(t, result)
+		calls := relay.seen()
+		echoNonce := strings.TrimPrefix(calls[len(calls)-1], "echo ")
+
+		if echoNonce == previous || echoNonce == "" {
+			t.Fatalf("echo nonce = %q", echoNonce)
+		}
+
+		line := regexp.MustCompile(
+			`Relay echo: sent; an event with delivery id ([A-Za-z0-9_-]{1,64}) ` +
+				`\(provider awrel, event echo\) came back from the relay in ([0-9]+) ms`,
+		)
+		match := line.FindStringSubmatch(text)
+
+		if len(match) != 3 || match[1] != echoNonce {
+			t.Fatalf("echo line = %q, nonce %q", text, echoNonce)
+		}
+
+		text = line.ReplaceAllString(text, "Relay echo: OK")
+		previous = assertSelfTest(t, raw, text, previous, sentAt, compact)
+
+		if echoNonce == previous {
+			t.Fatal("echo reused self-test nonce")
+		}
 	}
 
-	if got := relay.seen(); len(got) != 0 {
-		t.Fatalf("self-test contacted the relay: %v", got)
+	if got := relay.seen(); len(got) != 2 || got[0] == got[1] {
+		t.Fatalf("echo calls = %v", got)
 	}
 
 	if !reflect.DeepEqual(relay.subs, before) {
@@ -1476,7 +1507,7 @@ func assertSelfTest(t *testing.T, raw json.RawMessage, text, previous string, ea
 		". If an event with that delivery id does not reach this session within this turn, " +
 		"this session is not receiving awrel events, even though subscriptions are accepted. " +
 		"Check the client's settings for receiving server notifications, then reconnect.\n" +
-		"Relay connection: connected\nSubscriptions: 2\n" + eventCountsZero +
+		"Relay connection: connected\nRelay echo: OK\nSubscriptions: 2\n" + eventCountsZero +
 		"Persistence: " + persistenceOff
 	if text != want {
 		t.Fatalf("result = %q, want %q", text, want)
@@ -1505,7 +1536,7 @@ func TestCheckDeliveryPersistenceStates(t *testing.T) {
 			result, _, err := server.checkDelivery(t.Context(), nil, ListArgs{})
 			want := "This client has no event delivery: awrel does not know how to deliver events to client . " +
 				"Subscriptions are accepted but no event will arrive.\n" +
-				"Relay connection: not connected\nSubscriptions: 0\n" + eventCountsZero + "Persistence: " + state
+				"Relay connection: not connected\nRelay echo: not sent, relay not connected\nSubscriptions: 0\n" + eventCountsZero + "Persistence: " + state
 
 			if err != nil || result.IsError || textOf(t, result) != want {
 				t.Fatalf("check_delivery = %+v, %v; want %q", result, err, want)
@@ -1522,7 +1553,7 @@ func TestCheckDeliveryWithoutDeliverer(t *testing.T) {
 	result := callTool(t, rig, checkTool, map[string]any{})
 	want := "This client has no event delivery: awrel does not know how to deliver events to client other. " +
 		"Subscriptions are accepted but no event will arrive.\n" +
-		"Relay connection: not connected\nSubscriptions: 0\n" + eventCountsZero +
+		"Relay connection: not connected\nRelay echo: not sent, relay not connected\nSubscriptions: 0\n" + eventCountsZero +
 		"Persistence: " + persistenceOff
 
 	if result.IsError || textOf(t, result) != want {
@@ -1549,7 +1580,7 @@ func TestCheckDeliveryFailure(t *testing.T) {
 	rig.server.mu.Unlock()
 	result := callTool(t, rig, checkTool, map[string]any{})
 	want := "Failed to send a self-test event: not connected to the relay: dial refused\n" +
-		"Relay connection: not connected\nSubscriptions: 0\n" + eventCountsZero +
+		"Relay connection: not connected\nRelay echo: not sent, relay not connected\nSubscriptions: 0\n" + eventCountsZero +
 		"Persistence: " + persistenceOff
 
 	if result.IsError || textOf(t, result) != want {
@@ -1649,5 +1680,39 @@ func assertOutcomeLines(t *testing.T, lines []string, events int) {
 		if outcome == failedOutcome && !strings.Contains(line, `error="not connected to the relay: dial refused"`) {
 			t.Fatal(line)
 		}
+	}
+}
+
+func TestCheckDeliveryEchoErrors(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"old relay", fmt.Errorf("echo: %w", protocol.ErrEchoUnsupported), "the relay doesn't support echo yet"},
+		{"failure", fmt.Errorf("echo: %w", io.EOF), "failed: echo: EOF"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			relay := newRelay()
+			relay.connected = true
+			relay.err = test.err
+			rig := start(t, otherName, relay)
+			result := callTool(t, rig, checkTool, map[string]any{})
+			want := "This client has no event delivery: awrel does not know how to deliver events to client other. " +
+				"Subscriptions are accepted but no event will arrive.\nRelay connection: connected\nRelay echo: " +
+				test.want + "\nSubscriptions: 0\n" + eventCountsZero + "Persistence: off (no session key or AWREL_PERSIST=0)"
+
+			if result.IsError || textOf(t, result) != want {
+				t.Fatalf("result = %+v (%q), want %q", result, textOf(t, result), want)
+			}
+
+			if calls := relay.seen(); len(calls) != 1 || !strings.HasPrefix(calls[0], "echo ") {
+				t.Fatalf("calls = %v", calls)
+			}
+		})
 	}
 }

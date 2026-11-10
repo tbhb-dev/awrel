@@ -853,3 +853,12 @@ func TestUnconnectedRelayStatus(t *testing.T) {
 		t.Fatalf("idle relay status = %t, %d", connected, count)
 	}
 }
+
+func TestUnconnectedEcho(t *testing.T) {
+	t.Parallel()
+
+	err := (unconnectedRelay{err: errNoEndpoint}).Echo(t.Context(), "n")
+	if !errors.Is(err, errNoEndpoint) {
+		t.Fatalf("Echo = %v", err)
+	}
+}

@@ -54,7 +54,7 @@ const Instructions = "awrel relays webhook events into this session. " +
 	"Subscriptions persist across restarts when a session key is available, " +
 	"and the server tells you when it restores some. Persistence is not available on Windows. " +
 	"A session without a key keeps session-only subscriptions.\n\n" +
-	"After a restart or reconnect, call check_delivery and confirm its event arrives."
+	"After a restart or reconnect, call check_delivery and confirm both events arrive: self_test and echo."
 
 // channelCapability is the experimental capability that makes Claude Code
 // treat this server as a channel.
@@ -77,6 +77,7 @@ var errIncompleteSubscription = errors.New(
 type Relay interface {
 	Subscribe(ctx context.Context, sub protocol.Subscription) ([]protocol.Subscription, error)
 	Unsubscribe(ctx context.Context, sub protocol.Subscription) ([]protocol.Subscription, error)
+	Echo(ctx context.Context, nonce string) error
 	List(ctx context.Context) ([]protocol.Subscription, error)
 	// Status reads connection state, subscription count and gated event count locally.
 	Status() (connected bool, subscriptions int, gated uint64)
@@ -470,11 +471,35 @@ func (s *Server) checkDelivery(
 		state = "connected"
 	}
 
-	message += fmt.Sprintf("\nRelay connection: %s\nSubscriptions: %d"+
+	message += fmt.Sprintf("\nRelay connection: %s\nRelay echo: %s\nSubscriptions: %d"+
 		"\nEvents since start: %d delivered, %d gated, %d dropped, %d failed\nPersistence: %s",
-		state, count, s.delivered.Load(), gated, s.dropped.Load(), s.failed.Load(), s.persistence)
+		state, s.relayEcho(ctx, connected), count, s.delivered.Load(), gated, s.dropped.Load(), s.failed.Load(), s.persistence)
 
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: message}}}, nil, nil
+}
+
+func (s *Server) relayEcho(ctx context.Context, connected bool) string {
+	if !connected {
+		return "not sent, relay not connected"
+	}
+
+	nonce := rand.Text()
+	started := time.Now()
+	err := s.relay.Echo(ctx, nonce)
+
+	if errors.Is(err, protocol.ErrEchoUnsupported) {
+		return "the relay doesn't support echo yet"
+	}
+
+	if err != nil {
+		return "failed: " + err.Error()
+	}
+
+	return fmt.Sprintf(
+		"sent; an event with delivery id %s (provider awrel, event echo) came back from the relay in %d ms",
+		nonce,
+		time.Since(started).Milliseconds(),
+	)
 }
 
 // nopWriteCloser adds a Close that does nothing to a writer, so that ending

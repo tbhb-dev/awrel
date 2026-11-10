@@ -731,3 +731,38 @@ it("does not test omitted filters even when the payload has those fields", async
   );
   expect(reached).toBe(1);
 });
+
+it("echoes only to the requesting socket, before acknowledging, without matching or changing subscriptions", async () => {
+  const other = await dial();
+  await exchange(other, subscribe("s", { provider: "awrel" }));
+  other.received.length = 0;
+  const client = await dial();
+  const before = Date.now();
+  const event = await exchange(
+    client,
+    '{"type":"echo","id":"e","nonce":"nonce_1-ABC"}',
+  );
+  await settle();
+  const frames: unknown[] = client.received.map((message): unknown =>
+    JSON.parse(message),
+  );
+  expect(frames).toStrictEqual([event, { type: "echoed", id: "e" }]);
+  const timestamp = (event as { payload: { relay_received_at: string } })
+    .payload.relay_received_at;
+  expect(event).toStrictEqual({
+    type: "event",
+    provider: "awrel",
+    event: "echo",
+    delivery: "nonce_1-ABC",
+    payload: { echo: "nonce_1-ABC", relay_received_at: timestamp },
+  });
+  expect(new Date(timestamp).toISOString()).toBe(timestamp);
+  expect(timestamp.endsWith("Z")).toBe(true);
+  expect(Date.parse(timestamp)).toBeGreaterThanOrEqual(before);
+  expect(Date.parse(timestamp)).toBeLessThanOrEqual(Date.now());
+  expect(other.received).toStrictEqual([]);
+  expect(await exchange(client, list)).toStrictEqual(subscriptions("l", []));
+  expect(await exchange(other, list)).toStrictEqual(
+    subscriptions("l", [{ provider: "awrel" }]),
+  );
+});

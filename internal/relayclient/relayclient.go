@@ -40,6 +40,8 @@ const (
 )
 
 var (
+	// ErrEchoUnsupported means the relay predates the echo request.
+	ErrEchoUnsupported = protocol.ErrEchoUnsupported
 	// ErrRelayTooOld refuses a connection that can't honor requested filters.
 	ErrRelayTooOld = errors.New(
 		"relay too old: subscription filter capability or canonical subscription echo missing or changed",
@@ -283,6 +285,19 @@ func (c *Client) Unsubscribe(ctx context.Context, sub protocol.Subscription) ([]
 // List returns the relay's current list.
 func (c *Client) List(ctx context.Context) ([]protocol.Subscription, error) {
 	return c.call(ctx, protocol.EncodeList)
+}
+
+// Echo asks the relay to send an event, then waits for its acknowledgement.
+func (c *Client) Echo(ctx context.Context, nonce string) error {
+	_, err := c.call(ctx, func(id string) []byte { return protocol.EncodeEcho(id, nonce) })
+
+	relayErr, ok := errors.AsType[*protocol.Error](err)
+	if ok &&
+		relayErr.Code == "bad_message" && relayErr.Message == "unknown message type" {
+		return ErrEchoUnsupported
+	}
+
+	return err
 }
 
 // Status reads connection state, subscription count and gated event count locally.
@@ -538,6 +553,8 @@ func (c *Client) handle(ctx context.Context, msg protocol.Message) bool {
 	switch message := msg.(type) {
 	case protocol.Subscriptions:
 		return c.handleSubscriptions(ctx, message)
+	case protocol.Echoed:
+		c.route(ctx, message.ID, reply{subscriptions: nil, err: nil})
 	case protocol.Error:
 		if message.ID == "" {
 			c.opts.Logger.WarnContext(ctx, "relay error without an id", slog.Any("error", message))
