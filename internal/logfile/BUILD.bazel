@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Tony Burns
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@tbhb_rules//repo:defs.bzl", "repo_files")
+
+repo_files()
+
+go_library(
+    name = "logfile",
+    srcs = ["logfile.go"],
+    importpath = "go.tbhb.dev/awrel/internal/logfile",
+    visibility = ["//:__subpackages__"],
+    deps = ["//internal/persist"],
+)
+
+go_test(
+    name = "logfile_test",
+    srcs = ["logfile_internal_test.go"],
+    args = ["-test.v"],
+    embed = [":logfile"],
+    visibility = ["//:__pkg__"],
+    deps = ["//internal/persist"],
+)

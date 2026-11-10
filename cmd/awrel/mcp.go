@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"go.tbhb.dev/awrel/internal/buildmeta"
+	"go.tbhb.dev/awrel/internal/logfile"
 	"go.tbhb.dev/awrel/internal/mcpserver"
 	"go.tbhb.dev/awrel/internal/persist"
 	"go.tbhb.dev/awrel/internal/protocol"
@@ -170,6 +171,15 @@ func newMCPCmd(stdin io.Reader, getenv func(string) string) *cobra.Command {
 // newMCPCmdWithTimeout is newMCPCmd with the relay request budget set, where
 // zero means the default.
 func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTimeout time.Duration) *cobra.Command {
+	return newMCPCmdWithLog(stdin, getenv, requestTimeout, logfile.Open)
+}
+
+// logOpener lets tests measure file I/O without adding production diagnostics.
+type logOpener func(string, func(string) string, io.Writer, time.Time) (io.Writer, func(), string)
+
+func newMCPCmdWithLog(
+	stdin io.Reader, getenv func(string) string, requestTimeout time.Duration, openLog logOpener,
+) *cobra.Command {
 	var endpointFlag, formatFlag string
 
 	cmd := &cobra.Command{
@@ -204,6 +214,7 @@ func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTi
 				getenv,
 				requestTimeout,
 				connectRelay,
+				openLog,
 			)
 		},
 	}
@@ -228,12 +239,15 @@ type relayConnector func(
 // signal arrives, and the relay connection alongside it.
 func serveMCP(
 	cmd *cobra.Command, stdin io.Reader, endpoint string, compact bool, sessionKey string,
-	getenv func(string) string, requestTimeout time.Duration, connect relayConnector,
+	getenv func(string) string, requestTimeout time.Duration, connect relayConnector, openLog logOpener,
 ) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	logger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil))
+	writer, closeLog, logPath := openLog(sessionKey, getenv, cmd.ErrOrStderr(), time.Now())
+	defer closeLog()
+
+	logger := slog.New(slog.NewTextHandler(writer, nil))
 
 	var server *mcpserver.Server
 
@@ -258,6 +272,7 @@ func serveMCP(
 	)
 	server = mcpserver.New(mcpserver.Options{
 		Persistence: persistence,
+		LogFile:     logPath,
 		Logger:      logger,
 		Relay:       relay,
 		Version:     buildmeta.Get().Version,

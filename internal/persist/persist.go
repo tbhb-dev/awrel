@@ -114,13 +114,14 @@ func open(
 		return nil, "off (no session key or AWREL_PERSIST=0)"
 	}
 
-	dir, err := stateDir(getenv)
+	base, err := StateDir(getenv)
 	if err != nil {
 		logger.Warn("session subscriptions not saved", slog.Any("error", err))
 
 		return nil, "off (no session key or AWREL_PERSIST=0)"
 	}
 
+	dir := filepath.Join(base, "sessions")
 	store := newStore(dir, key, endpoint, logger)
 
 	// Refresh first, so that the session's own restart never prunes its file.
@@ -130,9 +131,9 @@ func open(
 	return store, "saved for this session key"
 }
 
-// stateDir is $XDG_STATE_HOME/awrel/sessions, with ~/.local/state when
-// XDG_STATE_HOME is unset or empty.
-func stateDir(getenv func(string) string) (string, error) {
+// StateDir returns the awrel state directory, using `$XDG_STATE_HOME` or
+// the home directory's `.local/state` when the state variable is empty.
+func StateDir(getenv func(string) string) (string, error) {
 	state := getenv(stateEnv)
 	if state == "" {
 		home := getenv(homeEnv)
@@ -143,12 +144,10 @@ func stateDir(getenv func(string) string) (string, error) {
 		state = filepath.Join(home, ".local", "state")
 	}
 
-	return filepath.Join(state, "awrel", "sessions"), nil
+	return filepath.Join(state, "awrel"), nil
 }
 
 func newStore(dir, key, endpoint string, logger *slog.Logger) *Store {
-	sum := sha256.Sum256([]byte(key))
-
 	return &Store{
 		logger:     logger,
 		createTemp: os.CreateTemp,
@@ -157,9 +156,16 @@ func newStore(dir, key, endpoint string, logger *slog.Logger) *Store {
 		rename:     os.Rename,
 		flock:      flock,
 		write:      writeAll,
-		path:       filepath.Join(dir, hex.EncodeToString(sum[:])+fileSuffix),
+		path:       filepath.Join(dir, Name(key)+fileSuffix),
 		endpoint:   endpoint,
 	}
+}
+
+// Name hashes a session key to identify its state files.
+func Name(key string) string {
+	sum := sha256.Sum256([]byte(key))
+
+	return hex.EncodeToString(sum[:])
 }
 
 // Prune deletes the session files in dir that are older than MaxAge at now,

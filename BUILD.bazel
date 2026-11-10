@@ -122,6 +122,7 @@ GO_TARGETS = [
     "//internal/buildmeta:buildmeta_test",
     "//internal/compact:compact_test",
     "//internal/delivery:delivery_test",
+    "//internal/logfile:logfile_test",
     "//internal/mcpserver:mcpserver_test",
     "//internal/persist:persist_test",
     "//internal/protocol:protocol_test",
@@ -227,7 +228,12 @@ gomutants_test(
         "@platforms//os:windows": ["@platforms//:incompatible"],
         "//conditions:default": [],
     }),
-    tests = ["//internal/persist:persist_test"],
+    # Windows ignores Unix mode bits, so these packages' tests can't assert the
+    # file and directory modes there, and the mode mutants would live.
+    tests = [
+        "//internal/logfile:logfile_test",
+        "//internal/persist:persist_test",
+    ],
 )
 
 # Condition coverage: every condition of a package reaches both outcomes, as
@@ -261,6 +267,14 @@ gobco_test(
     go_mod = "go.mod",
     go_sum = "go.sum",
     tests = ["//internal/delivery:delivery_test"],
+)
+
+gobco_test(
+    name = "logfile_gobco_test",
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    proxy = "@go_mod_proxy//:proxy",
+    tests = ["//internal/logfile:logfile_test"],
 )
 
 gobco_test(

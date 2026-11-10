@@ -90,9 +90,11 @@ type Relay interface {
 type Options struct {
 	// Persistence describes the outcome of opening the session Store.
 	Persistence string
-	Logger      *slog.Logger
-	Relay       Relay
-	Version     string
+	// LogFile describes the outcome of opening the client log.
+	LogFile string
+	Logger  *slog.Logger
+	Relay   Relay
+	Version string
 	// Compact delivers events with compact payloads.
 	Compact bool
 }
@@ -179,6 +181,7 @@ type Server struct {
 	session     *mcp.ServerSession
 	client      string
 	persistence string
+	logFile     string
 	// notices await initialization, oldest first.
 	lastOutage *connectionOutage
 	notices    []sessionNotice
@@ -202,6 +205,7 @@ func New(opts Options) *Server {
 		session:        nil,
 		client:         "",
 		persistence:    opts.Persistence,
+		logFile:        opts.LogFile,
 		notices:        nil,
 		lastOutage:     nil,
 		mu:             sync.Mutex{},
@@ -600,7 +604,7 @@ func (s *Server) checkDelivery(
 
 	message += fmt.Sprintf(
 		"\nRelay connection: %s\nRelay echo: %s\nSubscriptions: %d"+
-			"\nEvents since start: %d delivered, %d gated, %d dropped, %d failed\nPersistence: %s",
+			"\nEvents since start: %d delivered, %d gated, %d dropped, %d failed\nPersistence: %s\nLog file: %s",
 		state+s.outageStatus(),
 		s.relayEcho(ctx, connected),
 		count,
@@ -609,6 +613,7 @@ func (s *Server) checkDelivery(
 		s.dropped.Load(),
 		s.failed.Load(),
 		s.persistence,
+		s.logFile,
 	)
 
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: message}}}, nil, nil

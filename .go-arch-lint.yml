@@ -24,6 +24,7 @@ components:
   delivery: {in: internal/delivery}
   mcpserver: {in: internal/mcpserver}
   persist: {in: internal/persist}
+  logfile: {in: internal/logfile}
 
 vendors:
   windows: {in: [golang.org/x/sys/windows]}
@@ -33,7 +34,7 @@ vendors:
 
 deps:
   cmd:
-    mayDependOn: [buildmeta, protocol, transport, relayclient, mcpserver, persist]
+    mayDependOn: [buildmeta, protocol, transport, relayclient, mcpserver, persist, logfile]
     canUse: [cobra, websocket]  # its tests' fake relay accepts with coder/websocket
   buildmeta:
     mayDependOn: [buildmeta]  # a leaf; go-arch-lint rejects an empty list
@@ -55,3 +56,5 @@ deps:
   persist:
     mayDependOn: [protocol]
     canUse: [windows]
+  logfile:
+    mayDependOn: [persist]
