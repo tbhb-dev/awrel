@@ -81,6 +81,9 @@ func Key(flagValue string, getenv func(string) string) string {
 type Store struct {
 	logger     *slog.Logger
 	createTemp func(dir, pattern string) (*os.File, error)
+	chtimes    func(name string, atime, mtime time.Time) error
+	mkdirAll   func(path string, perm fs.FileMode) error
+	rename     func(oldPath, newPath string) error
 	flock      func(fd, how int) error
 	write      func(f *os.File, data []byte) error
 	path       string
@@ -136,6 +139,9 @@ func newStore(dir, key, endpoint string, logger *slog.Logger) *Store {
 	return &Store{
 		logger:     logger,
 		createTemp: os.CreateTemp,
+		chtimes:    os.Chtimes,
+		mkdirAll:   os.MkdirAll,
+		rename:     rename,
 		flock:      flock,
 		write:      writeAll,
 		path:       filepath.Join(dir, hex.EncodeToString(sum[:])+fileSuffix),
@@ -146,12 +152,15 @@ func newStore(dir, key, endpoint string, logger *slog.Logger) *Store {
 // Prune deletes the session files in dir that are older than MaxAge at now,
 // and the locks beside them. A failure logs a warning.
 func Prune(dir string, now time.Time, logger *slog.Logger) {
-	prune(dir, now, logger, os.ReadDir)
+	prune(dir, now, logger, os.ReadDir, os.Remove)
 }
 
-// prune is Prune with the directory read passed in, so a test can make the
-// directory read or an entry's Info fail without depending on OS permissions.
-func prune(dir string, now time.Time, logger *slog.Logger, readDir func(string) ([]fs.DirEntry, error)) {
+// prune passes in filesystem operations so tests can fail them without
+// depending on OS permissions.
+func prune(
+	dir string, now time.Time, logger *slog.Logger,
+	readDir func(string) ([]fs.DirEntry, error), remove func(string) error,
+) {
 	entries, err := readDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return
@@ -181,7 +190,7 @@ func prune(dir string, now time.Time, logger *slog.Logger, readDir func(string) 
 
 		path := filepath.Join(dir, entry.Name())
 
-		err = errors.Join(os.Remove(path), ignoreMissing(os.Remove(path+lockSuffix)))
+		err = errors.Join(remove(path), ignoreMissing(remove(path+lockSuffix)))
 		if err != nil {
 			logger.Warn("prune session files", slog.Any("error", err))
 		}
@@ -237,7 +246,7 @@ func (s *Store) Remove(sub protocol.Subscription) error {
 }
 
 func (s *Store) touch(now time.Time) {
-	err := os.Chtimes(s.path, now, now)
+	err := s.chtimes(s.path, now, now)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		s.logger.Warn("refresh the session file's age", slog.String("path", s.path), slog.Any("error", err))
 	}
@@ -288,7 +297,7 @@ func (s *Store) valid(subs []protocol.Subscription) []protocol.Subscription {
 func (s *Store) update(change func([]protocol.Subscription) []protocol.Subscription) error {
 	dir := filepath.Dir(s.path)
 
-	err := os.MkdirAll(dir, dirMode)
+	err := s.mkdirAll(dir, dirMode)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
@@ -332,7 +341,7 @@ func (s *Store) replace(dir string, data []byte) error {
 
 	err = s.write(temp, data)
 	if err == nil {
-		err = rename(temp.Name(), s.path)
+		err = s.rename(temp.Name(), s.path)
 	}
 
 	if err != nil {

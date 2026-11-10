@@ -357,13 +357,18 @@ func TestTouchWarnsOnAFailure(t *testing.T) {
 
 	store, logs := testStore(t)
 
-	blocker := filepath.Join(t.TempDir(), "file")
-	mustWrite(t, blocker, "")
+	store.chtimes = func(path string, atime, mtime time.Time) error {
+		if path != store.path || atime.IsZero() || !atime.Equal(mtime) {
+			t.Errorf("chtimes(%q, %v, %v), want the session path and matching nonzero times", path, atime, mtime)
+		}
 
-	store.path = filepath.Join(blocker, "session.json")
+		return errBoom
+	}
+
 	store.Touch()
 
-	if !strings.Contains(logs.String(), "refresh the session file's age") {
+	if !strings.Contains(logs.String(), "refresh the session file's age") ||
+		!strings.Contains(logs.String(), errBoom.Error()) {
 		t.Errorf("no warning:\n%s", logs.String())
 	}
 }
@@ -697,8 +702,13 @@ func TestUpdateFailsWithoutADirectory(t *testing.T) {
 	t.Parallel()
 
 	store, _ := testStore(t)
-	// A file where the directory's parent should be.
-	mustWrite(t, filepath.Dir(filepath.Dir(store.path)), "x")
+	store.mkdirAll = func(path string, perm fs.FileMode) error {
+		if path != filepath.Dir(store.path) || perm != 0o700 {
+			t.Errorf("mkdirAll(%q, %o), want the session directory and 0700", path, perm)
+		}
+
+		return &fs.PathError{Op: "mkdir", Path: path, Err: errBoom}
+	}
 
 	err := store.Add(sub("push", "o/r"))
 	if err == nil || !strings.Contains(err.Error(), "create") {
@@ -766,8 +776,13 @@ func TestUpdateFailsWhenTheRenameIsRefused(t *testing.T) {
 	t.Parallel()
 
 	store, _ := testStore(t)
-	// A directory with a file inside can't be replaced by a file.
-	mustWrite(t, filepath.Join(store.path, "inner"), "x")
+	store.rename = func(oldPath, newPath string) error {
+		if filepath.Dir(oldPath) != filepath.Dir(store.path) || newPath != store.path {
+			t.Errorf("rename(%q, %q), want a temporary file and the session path", oldPath, newPath)
+		}
+
+		return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: errBoom}
+	}
 
 	err := store.Add(sub("push", "o/r"))
 	if err == nil || !strings.Contains(err.Error(), "write") {
@@ -775,6 +790,11 @@ func TestUpdateFailsWhenTheRenameIsRefused(t *testing.T) {
 	}
 
 	wantCause[*os.LinkError](t, err)
+
+	if !errors.Is(err, errBoom) {
+		t.Errorf("err = %v, want the rename error", err)
+	}
+
 	noTemporaryFiles(t, store)
 }
 
@@ -812,28 +832,6 @@ func noTemporaryFiles(t *testing.T, store *Store) {
 			t.Errorf("temporary file left: %s", entry.Name())
 		}
 	}
-}
-
-// readOnly makes dir refuse new entries until the test ends. It skips the test
-// on Windows, which has no Unix modes.
-func readOnly(t *testing.T, dir string) {
-	t.Helper()
-
-	if runtime.GOOS == windowsOS {
-		t.Skip(noModesNote)
-	}
-
-	err := os.Chmod(dir, 0o500) //nolint:gosec // a directory needs its execute bit
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	t.Cleanup(func() {
-		restoreErr := os.Chmod(dir, dirMode)
-		if restoreErr != nil {
-			t.Error(restoreErr)
-		}
-	})
 }
 
 func TestWriteAllReportsAClosedFile(t *testing.T) {
@@ -1015,7 +1013,7 @@ func TestPruneWarns(t *testing.T) {
 			}
 
 			return nil, errBoom
-		})
+		}, os.Remove)
 
 		if !strings.Contains(logs.String(), "prune session files") {
 			t.Errorf("no warning:\n%s", logs.String())
@@ -1029,7 +1027,7 @@ func TestPruneWarns(t *testing.T) {
 
 		prune("/none", time.Now(), logger, func(string) ([]fs.DirEntry, error) {
 			return []fs.DirEntry{fakeEntry{DirEntry: nil, name: "x.json"}}, nil
-		})
+		}, os.Remove)
 
 		if !strings.Contains(logs.String(), "boom") {
 			t.Errorf("no warning:\n%s", logs.String())
@@ -1051,7 +1049,7 @@ func TestPruneWarns(t *testing.T) {
 			entries, err := os.ReadDir(name)
 
 			return append([]fs.DirEntry{fakeEntry{DirEntry: nil, name: "x.json"}}, entries...), err
-		})
+		}, os.Remove)
 
 		if exists(path) {
 			t.Error("the entry after the failing one was not pruned")
@@ -1061,45 +1059,45 @@ func TestPruneWarns(t *testing.T) {
 			t.Errorf("no warning:\n%s", logs.String())
 		}
 	})
+}
 
-	t.Run("lock removal refused", func(t *testing.T) {
-		t.Parallel()
+func TestPruneWarnsWhenRemovalFails(t *testing.T) {
+	t.Parallel()
 
-		logger, logs := newLogs()
-		dir := t.TempDir()
-		now := time.Now()
-		path := filepath.Join(dir, "old.json")
+	for _, suffix := range []string{"", lockSuffix} {
+		t.Run("removal refused "+suffix, func(t *testing.T) {
+			t.Parallel()
 
-		mustWrite(t, path, "{}")
-		age(t, path, now)
-		// A directory with a file inside can't be removed like a file.
-		mustWrite(t, filepath.Join(path+lockSuffix, "inner"), "x")
+			logger, logs := newLogs()
+			dir := t.TempDir()
+			now := time.Now()
+			path := filepath.Join(dir, "old.json")
 
-		Prune(dir, now, logger)
+			mustWrite(t, path, "{}")
+			age(t, path, now)
 
-		if !strings.Contains(logs.String(), "prune session files") {
-			t.Errorf("no warning:\n%s", logs.String())
-		}
-	})
+			var removed []string
 
-	t.Run("removal refused", func(t *testing.T) {
-		t.Parallel()
+			prune(dir, now, logger, os.ReadDir, func(name string) error {
+				removed = append(removed, name)
+				if name == path+suffix {
+					return errBoom
+				}
 
-		logger, logs := newLogs()
-		dir := t.TempDir()
-		now := time.Now()
-		path := filepath.Join(dir, "old.json")
+				return os.Remove(name)
+			})
 
-		mustWrite(t, path, "{}")
-		age(t, path, now)
-		readOnly(t, dir)
+			if !slices.Equal(removed, []string{path, path + lockSuffix}) {
+				t.Errorf("remove calls = %v, want the session file and its lock", removed)
+			}
 
-		Prune(dir, now, logger)
-
-		if !strings.Contains(logs.String(), "prune session files") {
-			t.Errorf("no warning:\n%s", logs.String())
-		}
-	})
+			for _, message := range []string{"prune session files", errBoom.Error()} {
+				if !strings.Contains(logs.String(), message) {
+					t.Errorf("logs lack %q:\n%s", message, logs.String())
+				}
+			}
+		})
+	}
 }
 
 // TestHarnessDetectionList pins the harness variables, in the order Key

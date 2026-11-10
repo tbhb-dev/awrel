@@ -15,19 +15,23 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestRenameRetriesSharingViolations(t *testing.T) {
+func TestRenameRetriesReaderErrors(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		result    error
+		busyError error
 		name      string
 		busy      int
 		wantCalls int
 	}{
-		{nil, "success", 0, 1},
-		{nil, "reader closes", 1, 2},
-		{errBoom, "permanent error", 0, 1},
-		{windows.ERROR_SHARING_VIOLATION, "reader stays open", 10, 10},
+		{nil, nil, "success", 0, 1},
+		{nil, windows.ERROR_SHARING_VIOLATION, "sharing violation clears", 1, 2},
+		{nil, windows.ERROR_ACCESS_DENIED, "access denied clears", 1, 2},
+		{errBoom, nil, "permanent error", 0, 1},
+		{windows.ERROR_FILE_NOT_FOUND, nil, "missing source", 0, 1},
+		{windows.ERROR_SHARING_VIOLATION, windows.ERROR_SHARING_VIOLATION, "sharing violation persists", 10, 10},
+		{windows.ERROR_ACCESS_DENIED, windows.ERROR_ACCESS_DENIED, "access denied persists", 10, 10},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -41,7 +45,7 @@ func TestRenameRetriesSharingViolations(t *testing.T) {
 				checkRenameCall(t, calls, oldPath, newPath)
 
 				if calls <= test.busy {
-					return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: windows.ERROR_SHARING_VIOLATION}
+					return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: test.busyError}
 				}
 
 				return test.result
@@ -83,8 +87,12 @@ func TestRenameAfterAReaderCloses(t *testing.T) {
 		moveErr := os.Rename(from, to)
 
 		if calls == 1 {
-			if !errors.Is(moveErr, windows.ERROR_SHARING_VIOLATION) {
-				t.Fatalf("rename while the reader is open = %v, want ERROR_SHARING_VIOLATION", moveErr)
+			if !errors.Is(moveErr, windows.ERROR_SHARING_VIOLATION) &&
+				!errors.Is(moveErr, windows.ERROR_ACCESS_DENIED) {
+				t.Fatalf(
+					"rename while the reader is open = %v, want ERROR_SHARING_VIOLATION or ERROR_ACCESS_DENIED",
+					moveErr,
+				)
 			}
 
 			closeErr := reader.Close()

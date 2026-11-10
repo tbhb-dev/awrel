@@ -18,7 +18,8 @@ const (
 
 // rename allows a Load in another process to finish its os.ReadFile, which
 // closes promptly but temporarily prevents replacing the target on Windows.
-// The sibling lock serializes writers. Only sharing violations retry.
+// The sibling lock serializes writers. Sharing violations and access-denied
+// errors retry, since an open reader can cause either error.
 func rename(oldPath, newPath string) error {
 	return renameWithRetry(oldPath, newPath, os.Rename, time.Sleep)
 }
@@ -28,7 +29,8 @@ func renameWithRetry(
 ) error {
 	for attempt := 1; ; attempt++ {
 		err := move(oldPath, newPath)
-		if !errors.Is(err, windows.ERROR_SHARING_VIOLATION) || attempt >= renameAttempts {
+		if (!errors.Is(err, windows.ERROR_SHARING_VIOLATION) && !errors.Is(err, windows.ERROR_ACCESS_DENIED)) ||
+			attempt >= renameAttempts {
 			return err
 		}
 
