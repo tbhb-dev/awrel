@@ -255,6 +255,7 @@ gobco_test(
     name = "persist_gobco_test",
     go_mod = "go.mod",
     go_sum = "go.sum",
+    proxy = "@go_mod_proxy//:proxy",
     tests = ["//internal/persist:persist_test"],
 )
 
