@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestLockExclusiveRetriesWhenInterrupted(t *testing.T) {
@@ -103,5 +104,21 @@ func TestFlockLocksTheFile(t *testing.T) {
 	err = flock(int(second.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if !errors.Is(err, syscall.EWOULDBLOCK) {
 		t.Errorf("second lock = %v, want EWOULDBLOCK", err)
+	}
+}
+
+// boundedFlock is flock that gives up after a second instead of waiting. A
+// mutant that never releases a lock would otherwise block the tests that share
+// it until the test binary's own timeout, which is slower than the mutation tester waits.
+func boundedFlock(fd, how int) error {
+	deadline := time.Now().Add(time.Second)
+
+	for {
+		err := flock(fd, how|syscall.LOCK_NB)
+		if !errors.Is(err, syscall.EWOULDBLOCK) || time.Now().After(deadline) {
+			return err
+		}
+
+		time.Sleep(time.Millisecond)
 	}
 }

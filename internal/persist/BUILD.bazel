@@ -21,6 +21,7 @@ go_library(
 go_test(
     name = "persist_test",
     srcs = [
+        "lock_other_internal_test.go",
         "lock_unix_internal_test.go",
         "persist_internal_test.go",
     ],

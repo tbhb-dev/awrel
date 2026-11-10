@@ -76,7 +76,10 @@ func testStore(t *testing.T) (*Store, *lockedBuffer) {
 
 	logger, logs := newLogs()
 
-	return newStore(filepath.Join(t.TempDir(), "awrel", "sessions"), testKey, testEndpoint, logger), logs
+	store := newStore(filepath.Join(t.TempDir(), "awrel", "sessions"), testKey, testEndpoint, logger)
+	store.flock = boundedFlock
+
+	return store, logs
 }
 
 func mustLoad(t *testing.T, store *Store) []protocol.Subscription {
@@ -531,6 +534,7 @@ func TestProcessesApplyOnlyTheirOwnChange(t *testing.T) {
 
 	one, _ := testStore(t)
 	two := newStore(filepath.Dir(one.path), testKey, testEndpoint, one.logger)
+	two.flock = boundedFlock
 
 	kept, gone, added := sub("push", "o/kept"), sub("push", "o/gone"), sub("issues", "o/added")
 
@@ -566,12 +570,13 @@ func TestConcurrentAddsAreAllKept(t *testing.T) {
 
 	var group sync.WaitGroup
 
-	for i := range writers {
+	for index := range writers {
 		// Each writer is its own process with its own Store.
 		store := newStore(filepath.Dir(first.path), testKey, testEndpoint, first.logger)
+		store.flock = boundedFlock
 
 		group.Go(func() {
-			err := store.Add(sub("push", "o/r"+strings.Repeat("x", i+1)))
+			err := store.Add(sub("push", "o/r"+strings.Repeat("x", index+1)))
 			if err != nil {
 				t.Error(err)
 			}
