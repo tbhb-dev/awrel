@@ -237,9 +237,15 @@ func startClient(t *testing.T, name string, relay *stubRelay, compact bool, clie
 	}
 
 	t.Cleanup(func() {
-		_ = session.Close()
+		closed := runNoticeOperation(func() { _ = session.Close() })
 
 		cancel()
+
+		select {
+		case <-closed:
+		case <-time.After(waitLimit):
+			t.Error("client session did not close")
+		}
 
 		select {
 		case runErr := <-done:
@@ -303,6 +309,23 @@ func testEvent() protocol.Event {
 	return protocol.Event{
 		Provider: githubName, Event: "issue_comment", Delivery: "d1",
 		Repository: &repo, Payload: json.RawMessage(`{"action":"created"}`),
+	}
+}
+
+// Check an idle drain before parallel tests start their sessions.
+func TestAnnounceNoticeEmptyQueueReturns(t *testing.T) {
+	server := serverWithLogs(&syncBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}})
+	server.adopt(otherName, &mcp.ServerSession{})
+
+	awaitDone(t, runNoticeOperation(func() { server.announceNotice(t.Context()) }))
+
+	t.Parallel()
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	if server.sendingNotices {
+		t.Fatal("empty drain left the sending flag set")
 	}
 }
 
@@ -1364,6 +1387,8 @@ func TestNoticeLoggingFallback(t *testing.T) {
 		t.Fatalf("successful fallback logged a warning:\n%s", rig.logs.String())
 	}
 
+	assertBlockedLoggingNoticeDoesNotHoldServerLock(t, rig.server)
+
 	err = rig.session.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -2009,4 +2034,266 @@ func TestConnectionDurationUsesDisplayedWindow(t *testing.T) {
 			})
 		})
 	}
+}
+
+// blockingDeliverer records calls and stalls them until release or cancellation.
+type blockingDeliverer struct {
+	err     error
+	release chan struct{}
+	entered chan delivery.Event
+	mu      sync.Mutex
+	active  int
+	maximum int
+}
+
+func (d *blockingDeliverer) Deliver(ctx context.Context, event delivery.Event) error {
+	d.mu.Lock()
+	d.active++
+	d.maximum = max(d.maximum, d.active)
+	d.mu.Unlock()
+
+	defer func() {
+		d.mu.Lock()
+		d.active--
+		d.mu.Unlock()
+	}()
+
+	select {
+	case d.entered <- event:
+	case <-ctx.Done():
+		return fmt.Errorf("blocked delivery: %w", ctx.Err())
+	}
+
+	select {
+	case <-d.release:
+		return d.err
+	case <-ctx.Done():
+		return fmt.Errorf("blocked delivery: %w", ctx.Err())
+	case <-time.After(waitLimit):
+		return context.DeadlineExceeded
+	}
+}
+
+func newBlockingDeliverer() *blockingDeliverer {
+	return &blockingDeliverer{
+		err: nil, release: make(chan struct{}), entered: make(chan delivery.Event, noticeCapacity),
+		mu: sync.Mutex{}, active: 0, maximum: 0,
+	}
+}
+
+func awaitDone(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+
+	select {
+	case <-done:
+	case <-time.After(waitLimit / 4):
+		t.Fatal("operation did not return")
+	}
+}
+
+func runNoticeOperation(operation func()) <-chan struct{} {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		operation()
+	}()
+
+	return done
+}
+
+func awaitDelivery(t *testing.T, deliverer *blockingDeliverer, message string) {
+	t.Helper()
+
+	select {
+	case event := <-deliverer.entered:
+		want := fmt.Sprintf(`{"level":"info","message":%q}`, message)
+		if string(event.Message.Payload) != want {
+			t.Fatalf("notice = %s, want %s", event.Message.Payload, want)
+		}
+	case <-time.After(waitLimit / 4):
+		t.Fatal("notice delivery did not start")
+	}
+}
+
+func assertNoticeOperationsReturn(t *testing.T, server *Server, session *mcp.ServerSession) {
+	t.Helper()
+
+	for _, operation := range []struct {
+		call func()
+		name string
+	}{
+		{func() { server.adopt(otherName, session) }, "adopt"},
+		{func() { server.setTransport(nil) }, "setTransport"},
+		{func() { _ = server.currentClient() }, "currentClient"},
+		{func() { _ = server.outageStatus() }, "outageStatus"},
+	} {
+		select {
+		case <-runNoticeOperation(operation.call):
+		case <-time.After(waitLimit / 4):
+			t.Fatalf("%s did not return", operation.name)
+		}
+	}
+}
+
+func TestBlockedNoticeDoesNotHoldServerLock(t *testing.T) {
+	t.Parallel()
+
+	server := serverWithLogs(&syncBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}})
+	deliverer := newBlockingDeliverer()
+	server.deliverer = deliverer
+	session := &mcp.ServerSession{}
+	server.adopt(otherName, session)
+
+	ctx, cancel := context.WithTimeout(t.Context(), waitLimit)
+	defer cancel()
+	defer close(deliverer.release)
+
+	done := runNoticeOperation(func() {
+		server.enqueueNotice(ctx, sessionNotice{level: noticeInfo, text: "A"})
+	})
+
+	awaitDelivery(t, deliverer, "A")
+	assertNoticeOperationsReturn(t, server, session)
+
+	cancel()
+	awaitDone(t, done)
+}
+
+func TestNoticeDrainerPreservesOrderAfterSuccessAndFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, sendErr := range []error{nil, errNotConnected} {
+		t.Run(fmt.Sprint(sendErr), func(t *testing.T) {
+			t.Parallel()
+
+			server := serverWithLogs(&syncBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}})
+			deliverer := newBlockingDeliverer()
+			deliverer.err = sendErr
+			server.deliverer = deliverer
+			server.adopt(otherName, &mcp.ServerSession{})
+
+			ctx, cancel := context.WithTimeout(t.Context(), waitLimit)
+			defer cancel()
+
+			done := runNoticeOperation(func() {
+				server.enqueueNotice(ctx, sessionNotice{level: noticeInfo, text: "A"})
+			})
+
+			awaitDelivery(t, deliverer, "A")
+
+			for _, message := range []string{"B", "C"} {
+				awaitDone(t, runNoticeOperation(func() {
+					server.enqueueNotice(ctx, sessionNotice{level: noticeInfo, text: message})
+				}))
+			}
+
+			close(deliverer.release)
+			awaitDone(t, done)
+			awaitDelivery(t, deliverer, "B")
+			awaitDelivery(t, deliverer, "C")
+
+			awaitDone(t, runNoticeOperation(func() {
+				server.enqueueNotice(ctx, sessionNotice{level: noticeInfo, text: "D"})
+			}))
+			awaitDelivery(t, deliverer, "D")
+
+			server.mu.Lock()
+			pending, sending := server.notices, server.sendingNotices
+			server.mu.Unlock()
+
+			if pending != nil || sending {
+				t.Fatalf("drainer left queue %v, sending %v", pending, sending)
+			}
+
+			deliverer.mu.Lock()
+			active, maximum := deliverer.active, deliverer.maximum
+			deliverer.mu.Unlock()
+
+			if active != 0 || maximum != 1 {
+				t.Fatalf("concurrent deliveries: active %d, maximum %d", active, maximum)
+			}
+
+			select {
+			case extra := <-deliverer.entered:
+				t.Fatalf("extra notice: %s", extra.Message.Payload)
+			default:
+			}
+		})
+	}
+}
+
+func assertBlockedLoggingNoticeDoesNotHoldServerLock(t *testing.T, server *Server) {
+	t.Helper()
+
+	session := server.session
+	entered, release := make(chan struct{}), make(chan struct{})
+
+	var once sync.Once
+
+	server.server.AddSendingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			once.Do(func() { close(entered) })
+
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, fmt.Errorf("blocked logging: %w", ctx.Err())
+			case <-time.After(waitLimit):
+				return nil, context.DeadlineExceeded
+			}
+
+			return next(ctx, method, req)
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), waitLimit)
+	defer cancel()
+
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+
+	done := runNoticeOperation(func() {
+		server.enqueueNotice(ctx, sessionNotice{level: noticeInfo, text: "blocked fallback"})
+	})
+
+	awaitDone(t, entered)
+	assertNoticeOperationsReturn(t, server, session)
+	unblock()
+	awaitDone(t, done)
+}
+
+func TestNoticeDrainSnapshotsEachBatch(t *testing.T) {
+	t.Parallel()
+
+	server := serverWithLogs(&syncBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}})
+	first, next := newBlockingDeliverer(), newBlockingDeliverer()
+	close(next.release)
+
+	server.deliverer = first
+
+	ctx, cancel := context.WithTimeout(t.Context(), waitLimit)
+	defer cancel()
+
+	for _, message := range []string{"A", "B"} {
+		server.enqueueNotice(ctx, sessionNotice{level: noticeInfo, text: message})
+	}
+
+	server.adopt(otherName, &mcp.ServerSession{})
+
+	done := runNoticeOperation(func() { server.announceNotice(ctx) })
+
+	awaitDelivery(t, first, "A")
+	awaitDone(t, runNoticeOperation(func() {
+		server.mu.Lock()
+		server.deliverer = next
+		server.mu.Unlock()
+		server.adopt(otherName, &mcp.ServerSession{})
+		server.enqueueNotice(ctx, sessionNotice{level: noticeInfo, text: "C"})
+	}))
+	close(first.release)
+	awaitDone(t, done)
+	awaitDelivery(t, first, "B")
+	awaitDelivery(t, next, "C")
 }
