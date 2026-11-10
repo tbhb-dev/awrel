@@ -184,29 +184,32 @@ type Server struct {
 	notices    []sessionNotice
 	mu         sync.Mutex
 	compact    bool
-	delivered  atomic.Uint64
-	dropped    atomic.Uint64
-	failed     atomic.Uint64
+	// sendingNotices keeps one drainer sending notices in queue order.
+	sendingNotices bool
+	delivered      atomic.Uint64
+	dropped        atomic.Uint64
+	failed         atomic.Uint64
 }
 
 // New returns a Server that drives opts.Relay.
 func New(opts Options) *Server {
 	server := &Server{
-		server:      nil,
-		logger:      opts.Logger,
-		relay:       opts.Relay,
-		deliverer:   nil,
-		transport:   nil,
-		session:     nil,
-		client:      "",
-		persistence: opts.Persistence,
-		notices:     nil,
-		lastOutage:  nil,
-		mu:          sync.Mutex{},
-		compact:     opts.Compact,
-		delivered:   atomic.Uint64{},
-		dropped:     atomic.Uint64{},
-		failed:      atomic.Uint64{},
+		server:         nil,
+		logger:         opts.Logger,
+		relay:          opts.Relay,
+		deliverer:      nil,
+		transport:      nil,
+		session:        nil,
+		client:         "",
+		persistence:    opts.Persistence,
+		notices:        nil,
+		lastOutage:     nil,
+		mu:             sync.Mutex{},
+		compact:        opts.Compact,
+		sendingNotices: false,
+		delivered:      atomic.Uint64{},
+		dropped:        atomic.Uint64{},
+		failed:         atomic.Uint64{},
 	}
 
 	if opts.Persistence == "unavailable on this platform" {
@@ -391,25 +394,37 @@ func (s *Server) announceNotice(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.session == nil {
+	if s.session == nil || s.sendingNotices {
 		return
 	}
 
-	for _, notice := range s.notices {
-		s.sendNotice(ctx, notice)
+	s.sendingNotices = true
+
+	for len(s.notices) > 0 {
+		notices, session, deliverer := s.notices, s.session, s.deliverer
+		s.notices = nil
+		s.mu.Unlock()
+
+		for _, notice := range notices {
+			s.sendNotice(ctx, notice, session, deliverer)
+		}
+
+		s.mu.Lock()
 	}
 
-	s.notices = nil
+	s.sendingNotices = false
 }
 
-// sendNotice uses the current deliverer, falling back to SDK logging.
-// The caller holds s.mu so queued notices keep their order.
-func (s *Server) sendNotice(ctx context.Context, notice sessionNotice) {
+// sendNotice uses the snapshotted deliverer and session without holding s.mu,
+// falling back to SDK logging when there is no deliverer.
+func (s *Server) sendNotice(
+	ctx context.Context, notice sessionNotice, session *mcp.ServerSession, deliverer delivery.Deliverer,
+) {
 	var err error
 
-	if s.deliverer == nil {
+	if deliverer == nil {
 		//nolint:staticcheck // SDK logging is the fallback for clients without event delivery
-		err = s.session.Log(ctx, &mcp.LoggingMessageParams{
+		err = session.Log(ctx, &mcp.LoggingMessageParams{
 			Level: mcp.LoggingLevel(notice.level), Logger: serverName, Data: notice.text,
 		})
 	} else {
@@ -419,7 +434,7 @@ func (s *Server) sendNotice(ctx context.Context, notice sessionNotice) {
 		}
 		described := delivery.Describe(event)
 
-		err = s.deliverer.Deliver(ctx, described)
+		err = deliverer.Deliver(ctx, described)
 		if err != nil {
 			described.Log(ctx, s.logger, "failed", "error", err)
 		} else {
