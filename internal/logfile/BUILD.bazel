@@ -17,6 +17,7 @@ go_library(
 go_test(
     name = "logfile_test",
     srcs = ["logfile_internal_test.go"],
+    args = ["-test.v"],
     embed = [":logfile"],
     visibility = ["//:__pkg__"],
     deps = ["//internal/persist"],

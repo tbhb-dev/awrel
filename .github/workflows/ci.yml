@@ -89,6 +89,16 @@ jobs:
           read -ra filters <<<"${FILTERS}"
           bazelisk test --config=ci "${filters[@]}" //...
 
+      # Keep passing timings visible too; failed sessions also print stacks.
+      - name: Windows log file timings
+        if: always() && matrix.os == 'windows-2025'
+        run: |
+          for log in .bazel-testlogs/{cmd/awrel/awrel,internal/logfile/logfile}_test/test.log; do
+            if [[ -f "$log" ]]; then
+              cat "$log"
+            fi
+          done
+
       - name: Build the release binary
         env:
           RELEASE_CONFIG: ${{ matrix.release }}

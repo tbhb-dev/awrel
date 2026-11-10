@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	failStat     = "stat"
 	failWrite    = "write"
 	failReopen   = "reopen"
 	failRename   = "rename"
@@ -217,6 +216,24 @@ func TestRotation(t *testing.T) {
 		t.Fatalf("current = %q", got)
 	}
 
+	// Fill the newly rotated file exactly, then cross its boundary again.
+	remainder := strings.Repeat("r", testCap-1)
+	mustWrite(t, sink, remainder)
+
+	if got := read(t, sink.path); got != "c"+remainder {
+		t.Fatal("rotated before the new file reached the cap")
+	}
+
+	mustWrite(t, sink, "e")
+
+	if got := read(t, sink.path); got != "e" {
+		t.Fatalf("second rotation current = %q", got)
+	}
+
+	if got := read(t, sink.path+".1"); got != "c"+remainder {
+		t.Fatal("second rotation backup differs")
+	}
+
 	mustWrite(t, sink, strings.Repeat("d", testCap+1))
 
 	if got := read(t, sink.path+".1"); got != strings.Repeat("d", testCap) {
@@ -240,7 +257,7 @@ func TestRotation(t *testing.T) {
 func TestWriteFailures(t *testing.T) {
 	t.Parallel()
 
-	for _, failure := range []string{failStat, failWrite, failClose, failRename, failReopen} {
+	for _, failure := range []string{failWrite, failClose, failRename, failReopen} {
 		t.Run(failure, func(t *testing.T) {
 			t.Parallel()
 			sink, stderr := newWriter(t)
@@ -262,7 +279,7 @@ func breakWriter(t *testing.T, sink *writer, failure string) {
 	t.Helper()
 
 	switch failure {
-	case failStat, failClose:
+	case failClose:
 		err := sink.file.Close()
 		if err != nil {
 			t.Fatal(err)
@@ -277,7 +294,7 @@ func breakWriter(t *testing.T, sink *writer, failure string) {
 
 		sink.file = file
 	case failRename, failReopen:
-		seed(t, sink.path, strings.Repeat("x", testCap))
+		mustWrite(t, sink, strings.Repeat("x", testCap))
 
 		if failure == failRename {
 			sink.rename = func(string, string) error { return errTest }
@@ -504,16 +521,8 @@ func TestErrorCauses(t *testing.T) {
 		_, err := open(filepath.Join(path, "test.log"), io.Discard, slog.New(slog.DiscardHandler), time.Now())
 		requirePathError(t, err)
 	})
-	t.Run("append", func(t *testing.T) {
-		t.Parallel()
 
-		_, err := appendFile("unused", func(string, int, fs.FileMode) (*os.File, error) { return nil, errTest })
-		if !errors.Is(err, errTest) {
-			t.Fatalf("cause lost: %v", err)
-		}
-	})
-
-	for _, failure := range []string{failStat, failWrite, failClose, failRename, failReopen} {
+	for _, failure := range []string{failWrite, failClose, failRename, failReopen} {
 		t.Run(failure, func(t *testing.T) {
 			t.Parallel()
 			sink, _ := newWriter(t)
@@ -522,7 +531,7 @@ func TestErrorCauses(t *testing.T) {
 			var err error
 
 			switch failure {
-			case failStat, failWrite, failRename, failReopen:
+			case failWrite, failRename, failReopen:
 				err = sink.write([]byte("line"))
 			case failClose:
 				err = sink.rotate()
@@ -573,4 +582,112 @@ func TestPruneContinuesAfterInfoFailure(t *testing.T) {
 	}
 
 	assertWarnings(t, logs.String(), 1)
+}
+
+func TestAppendStartsAtExistingSize(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "test.log")
+
+	seed(t, path, strings.Repeat("x", testCap-1))
+
+	sink, err := open(path, io.Discard, slog.New(slog.DiscardHandler), time.Now())
+
+	requireOK(t, err)
+
+	t.Cleanup(sink.close)
+
+	mustWrite(t, sink, "a")
+
+	if got := read(t, path); len(got) != testCap {
+		t.Fatalf("size = %d", len(got))
+	}
+
+	mustWrite(t, sink, "b")
+
+	if got := read(t, path+".1"); len(got) != testCap {
+		t.Fatalf("backup size = %d", len(got))
+	}
+
+	if got := read(t, path); got != "b" {
+		t.Fatalf("current = %q", got)
+	}
+}
+
+func TestAppendStatFailure(t *testing.T) {
+	t.Parallel()
+
+	file, err := os.Create(filepath.Join(t.TempDir(), "test.log"))
+
+	requireOK(t, err)
+
+	requireOK(t, file.Close())
+
+	opened, size, err := appendFile(file.Name(), func(string, int, fs.FileMode) (*os.File, error) { return file, nil })
+
+	requirePathError(t, err)
+
+	if opened != nil || size != 0 {
+		t.Fatalf("append = %v, %d", opened, size)
+	}
+}
+
+func TestWriteTimings(t *testing.T) {
+	t.Parallel()
+
+	sink, _ := newWriter(t)
+
+	var total, slowest time.Duration
+
+	const lines = 200
+
+	for range lines {
+		started := time.Now()
+
+		mustWrite(t, sink, "level=INFO msg=test\n")
+
+		elapsed := time.Since(started)
+
+		total += elapsed
+
+		slowest = max(slowest, elapsed)
+	}
+
+	t.Logf("cached size: writes=%d total=%s slowest=%s", lines, total, slowest)
+
+	// Compare the removed metadata query on the same open file and host.
+
+	total, slowest = 0, 0
+
+	for range lines {
+		started := time.Now()
+
+		_, err := sink.file.Stat()
+
+		requireOK(t, err)
+
+		_, err = sink.file.WriteString("level=INFO msg=test\n")
+
+		requireOK(t, err)
+
+		elapsed := time.Since(started)
+
+		total += elapsed
+
+		slowest = max(slowest, elapsed)
+	}
+
+	t.Logf("Stat + Write: writes=%d total=%s slowest=%s", lines, total, slowest)
+}
+
+func TestAppendOpenFailure(t *testing.T) {
+	t.Parallel()
+
+	file, size, err := appendFile(
+		"unused",
+		func(string, int, fs.FileMode) (*os.File, error) { return nil, errTest },
+	)
+	if !errors.Is(err, errTest) || file != nil || size != 0 {
+		t.Fatalf("append = %v, %d, %v", file, size, err)
+	}
 }
