@@ -256,6 +256,12 @@ func bigArray(count int) json.RawMessage {
 //
 //nolint:paralleltest // AllocsPerRun and MemStats count the whole process
 func TestHostilePayloadFailsFast(t *testing.T) {
+	// Check the stop condition before allocating the large reproducer.
+	exhausted := &parser{dec: nil, limit: 0, budget: 0, nodes: 0, over: true}
+	if exhausted.more() {
+		t.Fatal("the parser continued after exhausting its budget")
+	}
+
 	payload := bigArray(524_288)
 	if len(payload) != 1_048_588 {
 		t.Fatalf("the reproducer has %d bytes", len(payload))

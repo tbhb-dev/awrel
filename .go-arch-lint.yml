@@ -26,6 +26,7 @@ components:
   persist: {in: internal/persist}
 
 vendors:
+  windows: {in: [golang.org/x/sys/windows]}
   cobra: {in: [github.com/spf13/cobra, github.com/spf13/cobra/**]}
   mcpsdk: {in: [github.com/modelcontextprotocol/go-sdk/mcp, github.com/modelcontextprotocol/go-sdk/jsonrpc]}
   websocket: {in: [github.com/coder/websocket, github.com/coder/websocket/**]}
@@ -53,3 +54,4 @@ deps:
     canUse: [mcpsdk]
   persist:
     mayDependOn: [protocol]
+    canUse: [windows]

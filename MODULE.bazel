@@ -164,6 +164,7 @@ use_repo(
     "com_github_coder_websocket",
     "com_github_modelcontextprotocol_go_sdk",
     "com_github_spf13_cobra",
+    "org_golang_x_sys",
 )
 
 # The modules go.sum lists, as a GOPROXY directory, so //:go_mod_tidy_test

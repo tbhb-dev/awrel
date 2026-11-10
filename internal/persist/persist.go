@@ -79,11 +79,12 @@ func Key(flagValue string, getenv func(string) string) string {
 
 // Store is one session's file.
 type Store struct {
-	logger   *slog.Logger
-	flock    func(fd, how int) error
-	write    func(f *os.File, data []byte) error
-	path     string
-	endpoint string
+	logger     *slog.Logger
+	createTemp func(dir, pattern string) (*os.File, error)
+	flock      func(fd, how int) error
+	write      func(f *os.File, data []byte) error
+	path       string
+	endpoint   string
 }
 
 // Open returns the Store for the session key and the relay endpoint, after it
@@ -133,11 +134,12 @@ func newStore(dir, key, endpoint string, logger *slog.Logger) *Store {
 	sum := sha256.Sum256([]byte(key))
 
 	return &Store{
-		logger:   logger,
-		flock:    flock,
-		write:    writeAll,
-		path:     filepath.Join(dir, hex.EncodeToString(sum[:])+fileSuffix),
-		endpoint: endpoint,
+		logger:     logger,
+		createTemp: os.CreateTemp,
+		flock:      flock,
+		write:      writeAll,
+		path:       filepath.Join(dir, hex.EncodeToString(sum[:])+fileSuffix),
+		endpoint:   endpoint,
 	}
 }
 
@@ -147,8 +149,8 @@ func Prune(dir string, now time.Time, logger *slog.Logger) {
 	prune(dir, now, logger, os.ReadDir)
 }
 
-// prune is Prune with the directory read passed in, so a test can make an
-// entry's Info fail, which only happens when a file vanishes during the scan.
+// prune is Prune with the directory read passed in, so a test can make the
+// directory read or an entry's Info fail without depending on OS permissions.
 func prune(dir string, now time.Time, logger *slog.Logger, readDir func(string) ([]fs.DirEntry, error)) {
 	entries, err := readDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -323,14 +325,14 @@ func mustMarshal(value any) []byte {
 // replace writes data to a temporary file in dir, then renames the file over
 // the session file. CreateTemp makes the file readable by its owner only.
 func (s *Store) replace(dir string, data []byte) error {
-	temp, err := os.CreateTemp(dir, "session-*.tmp")
+	temp, err := s.createTemp(dir, "session-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create a temporary file: %w", err)
 	}
 
 	err = s.write(temp, data)
 	if err == nil {
-		err = os.Rename(temp.Name(), s.path)
+		err = rename(temp.Name(), s.path)
 	}
 
 	if err != nil {

@@ -742,9 +742,13 @@ func TestUpdateFailsWithoutATemporaryFile(t *testing.T) {
 	t.Parallel()
 
 	store, _ := testStore(t)
-	// The lock file exists, so only the temporary file needs a writable directory.
-	mustWrite(t, store.path+lockSuffix, "")
-	readOnly(t, filepath.Dir(store.path))
+	store.createTemp = func(dir, pattern string) (*os.File, error) {
+		if dir != filepath.Dir(store.path) || pattern != "session-*.tmp" {
+			t.Errorf("createTemp(%q, %q), want the session directory and temporary pattern", dir, pattern)
+		}
+
+		return nil, &fs.PathError{Op: "open", Path: dir, Err: errBoom}
+	}
 
 	err := store.Add(sub("push", "o/r"))
 	if err == nil || !strings.Contains(err.Error(), "temporary") {
@@ -752,6 +756,10 @@ func TestUpdateFailsWithoutATemporaryFile(t *testing.T) {
 	}
 
 	wantCause[*fs.PathError](t, err)
+
+	if !errors.Is(err, errBoom) {
+		t.Errorf("err = %v, want the temporary file error", err)
+	}
 }
 
 func TestUpdateFailsWhenTheRenameIsRefused(t *testing.T) {
@@ -999,11 +1007,15 @@ func TestPruneWarns(t *testing.T) {
 		t.Parallel()
 
 		logger, logs := newLogs()
-		file := filepath.Join(t.TempDir(), "file")
-		mustWrite(t, file, "x")
+		dir := t.TempDir()
 
-		// A file where the directory should be.
-		Prune(file, time.Now(), logger)
+		prune(dir, time.Now(), logger, func(name string) ([]fs.DirEntry, error) {
+			if name != dir {
+				t.Errorf("readDir(%q), want %q", name, dir)
+			}
+
+			return nil, errBoom
+		})
 
 		if !strings.Contains(logs.String(), "prune session files") {
 			t.Errorf("no warning:\n%s", logs.String())

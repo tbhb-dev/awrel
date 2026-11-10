@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Tony Burns
 
-//go:build !unix
+//go:build !unix && !windows
 
 package persist
 

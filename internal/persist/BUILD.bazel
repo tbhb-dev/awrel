@@ -11,11 +11,21 @@ go_library(
     srcs = [
         "lock_other.go",
         "lock_unix.go",
+        "lock_windows.go",
         "persist.go",
+        "rename_other.go",
+        "rename_windows.go",
     ],
     importpath = "go.tbhb.dev/awrel/internal/persist",
     visibility = ["//:__subpackages__"],
-    deps = ["//internal/protocol"],
+    deps = [
+        "//internal/protocol",
+    ] + select({
+        "@rules_go//go/platform:windows": [
+            "@org_golang_x_sys//windows",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 go_test(
@@ -23,10 +33,19 @@ go_test(
     srcs = [
         "lock_other_internal_test.go",
         "lock_unix_internal_test.go",
+        "lock_windows_internal_test.go",
         "persist_internal_test.go",
+        "rename_windows_internal_test.go",
     ],
     embed = [":persist"],
     # The whole-module Go checks in the root package take the tests too.
     visibility = ["//:__pkg__"],
-    deps = ["//internal/protocol"],
+    deps = [
+        "//internal/protocol",
+    ] + select({
+        "@rules_go//go/platform:windows": [
+            "@org_golang_x_sys//windows",
+        ],
+        "//conditions:default": [],
+    }),
 )
