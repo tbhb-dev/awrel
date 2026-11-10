@@ -16,6 +16,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//internal/buildmeta",
+        "//internal/logfile",
         "//internal/mcpserver",
         "//internal/persist",
         "//internal/protocol",
@@ -34,6 +35,7 @@ go_binary(
 go_test(
     name = "awrel_test",
     srcs = [
+        "logfile_internal_test.go",
         "main_internal_test.go",
         "mcp_internal_test.go",
         "persist_internal_test.go",
