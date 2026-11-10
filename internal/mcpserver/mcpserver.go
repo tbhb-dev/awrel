@@ -7,6 +7,7 @@ package mcpserver
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"log/slog"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -51,7 +53,8 @@ const Instructions = "awrel relays webhook events into this session. " +
 	"so check current state with the provider's API or CLI before acting. " +
 	"Subscriptions persist across restarts when a session key is available, " +
 	"and the server tells you when it restores some. Persistence is not available on Windows. " +
-	"A session without a key keeps session-only subscriptions."
+	"A session without a key keeps session-only subscriptions.\n\n" +
+	"After a restart or reconnect, call check_delivery and confirm its event arrives."
 
 // channelCapability is the experimental capability that makes Claude Code
 // treat this server as a channel.
@@ -72,6 +75,8 @@ type Relay interface {
 	Subscribe(ctx context.Context, sub protocol.Subscription) ([]protocol.Subscription, error)
 	Unsubscribe(ctx context.Context, sub protocol.Subscription) ([]protocol.Subscription, error)
 	List(ctx context.Context) ([]protocol.Subscription, error)
+	// Status reads the connection state and subscription count without contacting the relay.
+	Status() (connected bool, subscriptions int)
 }
 
 // Options configure a Server.
@@ -118,10 +123,10 @@ type UnsubscribeArgs struct {
 	WorkflowPath string `json:"workflow_path,omitempty"` //nolint:tagliatelle // relay wire field
 }
 
-// ListArgs is the input of the tool that lists subscriptions, which takes none.
+// ListArgs is the empty input shared by tools that take no arguments.
 type ListArgs struct{}
 
-// SubscriptionsResult is the output of every tool.
+// SubscriptionsResult is the output of the subscription tools.
 type SubscriptionsResult struct {
 	Subscriptions []protocol.Subscription `json:"subscriptions"`
 }
@@ -209,6 +214,11 @@ func newServer(opts Options, goos string) *Server {
 		Description: "List this session's subscriptions.",
 	}, server.list)
 
+	mcp.AddTool(server.server, &mcp.Tool{
+		Name:        "check_delivery",
+		Description: "Send a self-test event and confirm it reaches this session.",
+	}, server.checkDelivery)
+
 	return server
 }
 
@@ -277,9 +287,9 @@ func (s *Server) initialized(ctx context.Context, req *mcp.InitializedRequest) {
 		name = info.Name
 	}
 
-	s.logger.InfoContext(ctx, "client initialized", "name", name)
-
 	s.adopt(name, req.Session)
+
+	s.logger.InfoContext(ctx, "client initialized", "name", name)
 	s.announceNotice(ctx)
 }
 
@@ -395,6 +405,52 @@ func (s *Server) list(
 	subs, err := s.relay.List(ctx)
 
 	return nil, SubscriptionsResult{Subscriptions: subs}, err //nolint:wrapcheck // the relay's text is the tool's error
+}
+
+// checkDelivery sends through the event adapter before returning its delivery ID.
+func (s *Server) checkDelivery(
+	ctx context.Context, _ *mcp.CallToolRequest, _ ListArgs,
+) (*mcp.CallToolResult, any, error) {
+	current := s.currentClient()
+
+	var message string
+
+	if current.deliverer == nil {
+		message = "This client has no event delivery: awrel does not know how to deliver events to client " +
+			current.name + ". Subscriptions are accepted but no event will arrive."
+	} else {
+		nonce := rand.Text()
+		event := protocol.Event{
+			Provider:   "awrel",
+			Event:      "self_test",
+			Delivery:   nonce,
+			Repository: nil,
+			Payload: json.RawMessage(
+				fmt.Sprintf(`{"self_test":"%s","sent_at":"%s"}`, nonce, time.Now().UTC().Format(time.RFC3339)),
+			),
+		}
+
+		err := current.deliverer.Deliver(ctx, event)
+		if err != nil {
+			message = "Failed to send a self-test event: " + err.Error()
+		} else {
+			message = "Sent a self-test event with delivery id " + nonce +
+				". If an event with that delivery id does not reach this session within this turn, " +
+				"this session is not receiving awrel events, even though subscriptions are accepted. " +
+				"Check the client's settings for receiving server notifications, then reconnect."
+		}
+	}
+
+	connected, count := s.relay.Status()
+	state := "not connected"
+
+	if connected {
+		state = "connected"
+	}
+
+	message += fmt.Sprintf("\nRelay connection: %s\nSubscriptions: %d", state, count)
+
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: message}}}, nil, nil
 }
 
 // nopWriteCloser adds a Close that does nothing to a writer, so that ending

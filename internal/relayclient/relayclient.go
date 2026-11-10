@@ -281,6 +281,14 @@ func (c *Client) List(ctx context.Context) ([]protocol.Subscription, error) {
 	return c.call(ctx, protocol.EncodeList)
 }
 
+// Status reads the connection state and subscription count without contacting the relay.
+func (c *Client) Status() (bool, int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.cur != nil, len(c.mirror)
+}
+
 // session dials once, resubscribes, and serves the connection until it ends.
 // It reports whether the connection finished resubscribing.
 func (c *Client) session(ctx context.Context) bool {

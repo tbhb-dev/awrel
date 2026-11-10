@@ -1939,3 +1939,30 @@ func TestProbeTimeoutClosesConnection(t *testing.T) {
 		}
 	}
 }
+
+func TestStatus(t *testing.T) {
+	t.Parallel()
+
+	client := New(quiet())
+	if connected, count := client.Status(); connected || count != 0 {
+		t.Fatalf("initial status = %t, %d", connected, count)
+	}
+
+	client.replaceMirror([]protocol.Subscription{subA(), subB()})
+
+	if connected, count := client.Status(); connected || count != 2 {
+		t.Fatalf("offline mirror = %t, %d", connected, count)
+	}
+
+	client.markReady(&session{conn: nil, done: make(chan struct{})})
+
+	if connected, count := client.Status(); !connected || count != 2 {
+		t.Fatalf("connected mirror = %t, %d", connected, count)
+	}
+
+	client.markNotReady()
+
+	if connected, count := client.Status(); connected || count != 2 {
+		t.Fatalf("disconnected mirror = %t, %d", connected, count)
+	}
+}
