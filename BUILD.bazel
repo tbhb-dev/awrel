@@ -40,10 +40,9 @@ load(
     "workers_tsc_test",
     "workers_vitest_test",
 )
-load("@tbhb_rules_go//:defs.bzl", "go_arch_lint_test", "go_deadcode_test", "go_mod_tidy_test", "gobco_test", "govulncheck", "govulncheck_test")
+load("@tbhb_rules_go//:defs.bzl", "go_arch_lint_test", "go_deadcode_test", "go_mod_tidy_test", "gobco_test", "gomutants_test", "govulncheck", "govulncheck_test")
 load("@tbhb_rules_typescript//:defs.bzl", "biome_test", "depcruise_test")
 load("//:vale_packages.bzl", "VALE_PACKAGES")
-load("//tools:mutation.bzl", "gomutants_test")
 load("//tools/lint:linters.bzl", "golangci_lint_test")
 
 # gazelle:prefix go.tbhb.dev/awrel
@@ -184,7 +183,7 @@ govulncheck(
 # and point the flag at them:
 #
 #   bazel run @tbhb_rules//quality:mutation_changes -- --base origin/main --out .mutation/changes.json
-#   bazel test --@tbhb_rules//quality:changes=//:mutation_changes //:gomutants_test
+#   bazel test --@tbhb_rules//quality:changes=//:mutation_changes //:gomutants_test //:gomutants_persist_test
 gomutants_test(
     name = "gomutants_test",
     cpus = 2,
@@ -206,11 +205,31 @@ gomutants_test(
         "//internal/delivery:delivery_test",
         "//internal/logfile:logfile_test",
         "//internal/mcpserver:mcpserver_test",
-        "//internal/persist:persist_test",
         "//internal/protocol:protocol_test",
         "//internal/relayclient:relayclient_test",
         "//internal/transport:transport_test",
     ],
+)
+
+gomutants_test(
+    name = "gomutants_persist_test",
+    cpus = 2,
+    data = ["//internal/compact:testdata"],
+    flags = [
+        "--exclude-calls=*.DebugContext,*.InfoContext,*.WarnContext,*.ErrorContext",
+        # A mutant that breaks a wait takes the tests' own one-second limits
+        # to fail, so the 2s default floor would count it as a timeout.
+        "--timeout-min=20s",
+        "--test-flags=-failfast",
+    ],
+    go_mod = "go.mod",
+    go_sum = "go.sum",
+    proxy = "@go_mod_proxy//:proxy",
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    tests = ["//internal/persist:persist_test"],
 )
 
 # Condition coverage: every condition of a package reaches both outcomes, as
