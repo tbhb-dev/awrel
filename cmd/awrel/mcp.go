@@ -128,8 +128,8 @@ func resolveToken(getenv func(string) string) (string, error) {
 	return token, nil
 }
 
-// unconnectedRelay is the Relay of a server that has no endpoint or token. Every tool
-// fails with the reason.
+// unconnectedRelay is the Relay of a server that has no endpoint or token.
+// Subscription tools fail with the reason.
 type unconnectedRelay struct {
 	err error
 }
@@ -146,6 +146,10 @@ func (r unconnectedRelay) Unsubscribe(context.Context, protocol.Subscription) ([
 
 func (r unconnectedRelay) List(context.Context) ([]protocol.Subscription, error) {
 	return nil, r.fail()
+}
+
+func (unconnectedRelay) Status() (bool, int) {
+	return false, 0
 }
 
 func (r unconnectedRelay) fail() error {
