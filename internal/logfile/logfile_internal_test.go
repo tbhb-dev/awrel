@@ -467,7 +467,9 @@ func TestStartupPrunesAndCloses(t *testing.T) {
 
 	closeLog()
 
-	_, fileErr := sink.file.Stat()
+	// A second Close reports fs.ErrClosed on every OS; Stat on Windows
+	// reports an invalid handle instead.
+	fileErr := sink.file.Close()
 	if !errors.Is(fileErr, fs.ErrClosed) {
 		t.Fatalf("close left file open: %v", fileErr)
 	}
