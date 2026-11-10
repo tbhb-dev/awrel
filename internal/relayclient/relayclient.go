@@ -87,8 +87,16 @@ func (nopStore) Add(protocol.Subscription) error    { return nil }
 func (nopStore) Remove(protocol.Subscription) error { return nil }
 func (nopStore) Touch()                             {}
 
+// ConnectionChange describes one end of an outage. Since is identical in the
+// loss and recovery callbacks. At is when this change happened.
+type ConnectionChange struct {
+	Since time.Time
+	At    time.Time
+	Up    bool
+}
+
 // Options configures a Client. Dial, OnEvent and Logger are required; a zero
-// duration, a nil Rand, a nil Store or a nil OnRestored selects the default.
+// duration or a nil optional function or Store selects the default.
 type Options struct {
 	// Dial opens a connection to the relay.
 	Dial func(context.Context) (*transport.Conn, error)
@@ -98,6 +106,10 @@ type Options struct {
 	// OnRestored receives the number of subscriptions the mirror holds once the
 	// first replay of Initial succeeds. It doesn't run when that number is zero.
 	OnRestored func(ctx context.Context, count int)
+	// OnConnection reports loss and recovery after a ready session. Nil does nothing.
+	OnConnection func(ctx context.Context, change ConnectionChange)
+	// Now supplies outage timestamps. Nil means time.Now.
+	Now func() time.Time
 	// Rand returns a float in [0, 1) for backoff jitter. Nil means rand.Float64.
 	Rand func() float64
 	// Store saves each acknowledged change. Nil saves nothing. The restore
@@ -137,6 +149,7 @@ type reply struct {
 
 // Client is a relay session. Create it with New and start it with Run.
 type Client struct {
+	outage   *ConnectionChange
 	lastErr  error
 	pong     chan struct{}
 	cur      *session
@@ -181,7 +194,16 @@ func New(opts Options) *Client {
 		opts.OnRestored = func(context.Context, int) {}
 	}
 
+	if opts.OnConnection == nil {
+		opts.OnConnection = func(context.Context, ConnectionChange) {}
+	}
+
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+
 	client := &Client{
+		outage:       nil,
 		opts:         opts,
 		after:        time.After,
 		kick:         newSignal[struct{}](),
@@ -354,6 +376,7 @@ func (c *Client) session(ctx context.Context) bool {
 	c.opts.Store.Touch()
 	c.markReady(sess)
 	c.announceRestored(ctx)
+	c.connectionRestored(ctx)
 
 	var keepers sync.WaitGroup
 
@@ -368,12 +391,33 @@ func (c *Client) session(ctx context.Context) bool {
 	}
 
 	c.markNotReady()
+
+	if ctx.Err() == nil {
+		at := c.opts.Now()
+		c.outage = &ConnectionChange{Up: false, Since: at, At: at}
+		c.opts.Logger.WarnContext(ctx, "relay connection lost", "since", at, "down_for", time.Duration(0))
+		c.opts.OnConnection(ctx, *c.outage)
+	}
+
 	cancel()
 	// gomutants:disable-next-line STATEMENT_REMOVE reason="the cancelled keepalive ends anyway"
 	keepers.Wait()
 	c.closeConn(ctx, conn)
 
 	return true
+}
+
+// connectionRestored reports recovery only after an outage of a ready session.
+func (c *Client) connectionRestored(ctx context.Context) {
+	if c.outage == nil || ctx.Err() != nil {
+		return
+	}
+
+	change := ConnectionChange{Up: true, Since: c.outage.Since, At: c.opts.Now()}
+	c.outage = nil
+	c.opts.Logger.InfoContext(ctx, "relay connection restored", "since", change.Since,
+		"down_for", change.At.Sub(change.Since))
+	c.opts.OnConnection(ctx, change)
 }
 
 // announceRestored tells OnRestored, once, how many subscriptions the replay

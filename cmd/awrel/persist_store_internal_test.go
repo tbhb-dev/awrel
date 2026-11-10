@@ -17,7 +17,6 @@ import (
 )
 
 const (
-	setLevelCall   = `{"jsonrpc":"2.0","id":9,"method":"logging/setLevel","params":{"level":"info"}}` + "\n"
 	harnessSession = "CLAUDE_CODE_SESSION_ID"
 	listCall       = `{"jsonrpc":"2.0","id":5,"method":"tools/call",` +
 		`"params":{"name":"list_subscriptions","arguments":{}}}` + "\n"
@@ -85,19 +84,17 @@ func driveRestore(t *testing.T, running *mcpRun, relay *sessionRelay) {
 	t.Helper()
 
 	// The relay sees the replay without any tool call. It delays the answer
-	// until the agent has finished its handshake and asked for logs.
+	// until the agent has finished its handshake.
 	if got := awaitSubscription(t, relay); got.Repository != "o/r" || got.Event != "issue_comment" {
 		t.Errorf("replayed %+v, want the saved subscription", got)
 	}
 
 	running.handshake(t)
-	running.send(t, setLevelCall)
-	running.await(t, false, `"id":9`)
 	close(relay.release)
 
 	running.await(t, false, `restored 1 subscription from the previous run`)
 	close(relay.push)
-	running.await(t, false, `"method":"notifications/claude/channel"`)
+	running.await(t, false, `"provider":"github"`)
 
 	running.send(t, listCall)
 	running.await(t, false, `"id":5`)
