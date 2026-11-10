@@ -452,7 +452,7 @@ func TestEventCounted(t *testing.T) {
 		{githubProvider, true},
 		{"other", true},
 	} {
-		for _, name := range []string{"self_test", "echo", "push"} {
+		for _, name := range []string{"self_test", "echo", "push", "notice"} {
 			event := newEvent(name, "d1", "", json.RawMessage(`{}`))
 			event.Provider = test.provider
 

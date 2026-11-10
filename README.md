@@ -63,7 +63,7 @@ A session without a key keeps session-only behavior: the server saves and restor
 
 Each key maps to the file `$XDG_STATE_HOME/awrel/sessions/<sha256 of the key>.json`, under `~/.local/state` when `XDG_STATE_HOME` is unset or empty. Directory mode is `0700` and file mode is `0600`. Inside are the relay endpoint and the subscriptions in the form that `list_subscriptions` returns. Loading skips a file with another version or endpoint, and it skips invalid JSON with a warning on stderr.
 
-If the file has at least one subscription for the current endpoint, the server connects to the relay at once and replays them. Events then arrive before any tool call, and `list_subscriptions` shows restored entries like any others. Once the replay succeeds, one MCP logging notification (`notifications/message`, level `info`) tells the agent, such as `restored 3 subscriptions from the previous run`. Per the MCP SDK, only a client that has set a log level with `logging/setLevel` receives logging notifications.
+If the file has at least one subscription for the current endpoint, the server connects to the relay at once and replays them. Events then arrive before any tool call, and `list_subscriptions` shows restored entries like any others. Once the replay succeeds, a notice event with provider `awrel`, event `notice`, and payload level `info` tells the agent, such as `restored 3 subscriptions from the previous run`. Clients without event delivery receive an MCP logging notification when they have set a log level with `logging/setLevel`.
 
 Each acknowledged `subscribe` or `unsubscribe` triggers a write. A failed write logs a warning to stderr, and the tool call still succeeds. Processes that share a key, such as an old process that keeps running after a reconnect, don't overwrite each other: a write locks and rereads the file, then applies only its own change. Restoring writes only to remove a subscription that the relay refuses.
 
@@ -75,7 +75,7 @@ Session files that nobody touched for 14 days disappear at the next startup. Set
 
 ## Troubleshooting delivery
 
-When a ready relay connection drops, the server sends a `warning` MCP logging notice, followed on recovery by an `info` notice with the outage window and a reminder to check current state with the provider's API or command-line tool. The relay loses events sent during that window and never replays them, and these notices require the client to set a log level.
+When a ready relay connection drops, the server sends a `warning` notice event, followed on recovery by an `info` notice with the outage window and a reminder to check current state with the provider's API or command-line tool. The relay loses events sent during that window and never replays them, and these events come from awrel itself with provider `awrel` and event `notice`. Clients without event delivery receive MCP logging notices when they set a log level.
 
 Each event writes one `event` line at Info level to stderr, which MCP clients keep as the server log. Open the client's server log for awrel and search for `event` or a delivery ID. Each line records `outcome` (`delivered`, `gated`, `dropped`, or `failed`), `delivery`, `provider`, and `event`, plus `repository` and `action` when present. awrel never logs payload contents. A `gated` or `dropped` line includes a `reason`. A `failed` line includes the `error`.
 

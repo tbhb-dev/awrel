@@ -253,7 +253,7 @@ func serveMCP(
 			server.Restored(ctx, count)
 		},
 		func(ctx context.Context, change relayclient.ConnectionChange) {
-			server.Connection(ctx, change)
+			server.Connection(ctx, change.Up, change.Since, change.At)
 		},
 	)
 	server = mcpserver.New(mcpserver.Options{

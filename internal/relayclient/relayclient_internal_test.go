@@ -2217,7 +2217,7 @@ func TestGatedAwrelEventsLogWithoutCounting(t *testing.T) {
 	t.Parallel()
 
 	for _, reason := range []string{filterPendingReason, replayPendingReason, relayIncompatibleReason} {
-		for _, name := range []string{echoEvent, "self_test", "future_test"} {
+		for _, name := range []string{echoEvent, "self_test", "future_test", "notice"} {
 			var logs bytes.Buffer
 
 			opts := quiet()
@@ -2262,7 +2262,7 @@ func TestGatedAwrelEventsLogWithoutCounting(t *testing.T) {
 func TestAwrelEventsForwardWithoutCounting(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{echoEvent, "self_test"} {
+	for _, name := range []string{echoEvent, "self_test", "notice"} {
 		var got protocol.Event
 
 		opts := quiet()

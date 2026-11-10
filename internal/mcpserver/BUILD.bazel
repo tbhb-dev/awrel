@@ -14,7 +14,6 @@ go_library(
     deps = [
         "//internal/delivery",
         "//internal/protocol",
-        "//internal/relayclient",
         "@com_github_modelcontextprotocol_go_sdk//jsonrpc",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
     ],
@@ -29,7 +28,6 @@ go_test(
     deps = [
         "//internal/delivery",
         "//internal/protocol",
-        "//internal/relayclient",
         "@com_github_modelcontextprotocol_go_sdk//jsonrpc",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
     ],

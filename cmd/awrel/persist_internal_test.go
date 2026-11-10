@@ -349,17 +349,15 @@ func TestServeMCPAnnouncesInjectedRestore(t *testing.T) {
 	}()
 
 	running.handshake(t)
-	running.send(t, setLoggingLevelCall)
-	running.await(t, false, `"id":9`)
 	close(restored)
 	running.await(t, false, "restored 2 subscriptions from the previous run")
 	running.await(t, false, "relay connection lost at 2026-11-10T12:00:00Z")
 	running.await(t, false, "relay connection restored at 2026-11-10T12:00:01Z")
+	running.await(t, false, `"provider":"awrel"`)
+	running.await(t, false, `"event":"notice"`)
 
 	err := running.finish(t)
 	if err != nil {
 		t.Fatalf("exit: %v", err)
 	}
 }
-
-const setLoggingLevelCall = `{"jsonrpc":"2.0","id":9,"method":"logging/setLevel","params":{"level":"info"}}` + "\n"

@@ -50,7 +50,7 @@ deps:
   delivery:
     mayDependOn: [compact, protocol]
   mcpserver:
-    mayDependOn: [delivery, protocol, relayclient]
+    mayDependOn: [delivery, protocol]
     canUse: [mcpsdk]
   persist:
     mayDependOn: [protocol]
