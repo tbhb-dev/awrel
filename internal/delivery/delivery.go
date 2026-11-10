@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"go.tbhb.dev/awrel/internal/compact"
 	"go.tbhb.dev/awrel/internal/protocol"
@@ -25,6 +26,34 @@ const (
 	maxContentBytes = 64 * 1024
 )
 
+// Event holds the metadata extracted once for logging and delivery.
+type Event struct {
+	Action  string
+	Message protocol.Event
+}
+
+// Describe extracts the action for both the outcome log and notification.
+func Describe(event protocol.Event) Event {
+	return Event{Message: event, Action: payloadAction(event.Payload)}
+}
+
+// Log records an outcome without including payload contents.
+func (e Event) Log(ctx context.Context, logger *slog.Logger, outcome string, extra ...any) {
+	attrs := []any{
+		"outcome", outcome, "delivery", e.Message.Delivery,
+		"provider", e.Message.Provider, "event", e.Message.Event,
+	}
+	if e.Message.Repository != nil {
+		attrs = append(attrs, "repository", *e.Message.Repository)
+	}
+
+	if e.Action != "" {
+		attrs = append(attrs, "action", e.Action)
+	}
+
+	logger.InfoContext(ctx, "event", append(attrs, extra...)...)
+}
+
 // Notifier sends a notification to the connected client.
 type Notifier interface {
 	Notify(ctx context.Context, method string, params json.RawMessage) error
@@ -32,7 +61,7 @@ type Notifier interface {
 
 // Deliverer hands one relay event to the agent.
 type Deliverer interface {
-	Deliver(ctx context.Context, event protocol.Event) error
+	Deliver(ctx context.Context, event Event) error
 }
 
 // Channel delivers events as Claude Code channel notifications. Each event
@@ -59,7 +88,7 @@ func NewChannel(n Notifier, opts Options) *Channel {
 }
 
 // Deliver sends event as one channel notification.
-func (c *Channel) Deliver(ctx context.Context, event protocol.Event) error {
+func (c *Channel) Deliver(ctx context.Context, event Event) error {
 	err := c.notifier.Notify(ctx, ChannelMethod, channelParams(event, c.compact))
 	if err != nil {
 		return fmt.Errorf("send channel notification: %w", err)
@@ -79,27 +108,27 @@ type channelParameters struct {
 // With `compacted` set, the payload is compacted first, and the note covers
 // whatever is still too large. A payload that can't be compacted goes whole, without the
 // attribute compact.
-func channelParams(event protocol.Event, compacted bool) json.RawMessage {
-	action := payloadAction(event.Payload)
+func channelParams(event Event, compacted bool) json.RawMessage {
+	action := event.Action
 
 	meta := map[string]string{
-		"provider": event.Provider,
-		"event":    event.Event,
-		"delivery": event.Delivery,
+		"provider": event.Message.Provider,
+		"event":    event.Message.Event,
+		"delivery": event.Message.Delivery,
 	}
 
-	if event.Repository != nil {
-		meta["repository"] = *event.Repository
+	if event.Message.Repository != nil {
+		meta["repository"] = *event.Message.Repository
 	}
 
 	if action != "" {
 		meta["action"] = action
 	}
 
-	payload := event.Payload
+	payload := event.Message.Payload
 
 	if compacted {
-		small, err := compact.Payload(event.Provider, event.Event, payload)
+		small, err := compact.Payload(event.Message.Provider, event.Message.Event, payload)
 		if err == nil {
 			payload = small
 			meta["compact"] = "true"
@@ -113,7 +142,7 @@ func channelParams(event protocol.Event, compacted bool) json.RawMessage {
 		// The note replaces the body, so no compact payload is delivered.
 		delete(meta, "compact")
 
-		content = tooLargeNote(event, action, len(payload))
+		content = tooLargeNote(event.Message, action, len(payload))
 	}
 
 	return mustMarshal(channelParameters{Content: content, Meta: meta})

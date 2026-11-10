@@ -43,7 +43,7 @@ deps:
     mayDependOn: [protocol]
     canUse: [websocket]
   relayclient:
-    mayDependOn: [protocol, transport]
+    mayDependOn: [protocol, transport, delivery]
     canUse: [websocket]  # its tests' fake relay accepts with coder/websocket
   compact:
     mayDependOn: [compact]  # a leaf

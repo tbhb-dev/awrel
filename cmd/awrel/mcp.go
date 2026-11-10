@@ -150,8 +150,8 @@ func (r unconnectedRelay) List(context.Context) ([]protocol.Subscription, error)
 	return nil, r.fail()
 }
 
-func (unconnectedRelay) Status() (bool, int) {
-	return false, 0
+func (unconnectedRelay) Status() (bool, int, uint64) {
+	return false, 0, 0
 }
 
 func (r unconnectedRelay) fail() error {

@@ -26,6 +26,7 @@ go_test(
     # The whole-module Go checks in the root package take the tests too.
     visibility = ["//:__pkg__"],
     deps = [
+        "//internal/delivery",
         "//internal/protocol",
         "@com_github_modelcontextprotocol_go_sdk//jsonrpc",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
