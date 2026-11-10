@@ -31,7 +31,11 @@ The `awrel mcp` command speaks MCP over stdio, and it holds the connection to th
 }
 ```
 
-Set `AWREL_ENDPOINT`, or the `--endpoint` flag, to the relay URL, and `AWREL_CONNECT_TOKEN` to the connect token. If that variable is empty, `AWREL_CONNECT_TOKEN_FILE` can point to a file with the token in it, and the server trims the whitespace around the token. If the endpoint or the token is missing, the server still starts, and every tool fails with the reason.
+Set `AWREL_ENDPOINT`, or the `--endpoint` flag, to the relay URL, and `AWREL_CONNECT_TOKEN` to the connect token. If that variable is empty, `AWREL_CONNECT_TOKEN_FILE` can point to a file with the token in it, and the server trims the whitespace around the token. If the endpoint or the token is missing, the server still starts, and subscription tools fail with the reason.
+
+After a restart or reconnect, call `check_delivery` and confirm its event arrives.
+
+### Claude Code
 
 Start Claude Code with the development channels flag, or it drops the events:
 
