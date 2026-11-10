@@ -53,6 +53,8 @@ func quiet() Options {
 		Logger:         slog.New(slog.DiscardHandler),
 		Store:          nil,
 		OnRestored:     nil,
+		OnConnection:   nil,
+		Now:            nil,
 		Initial:        nil,
 		Rand:           func() float64 { return 0 },
 		MinBackoff:     tick,
@@ -2278,6 +2280,204 @@ func TestAwrelEventsForwardWithoutCounting(t *testing.T) {
 		_, _, gated := client.Status()
 		if gated != 7 || !reflect.DeepEqual(got, event) {
 			t.Fatalf("forwarded event = %+v, gated count = %d", got, gated)
+		}
+	}
+}
+
+// TestConnectionOutages steps retries explicitly; no wall-clock delay determines
+// outage timestamps or how many failures happen before recovery.
+func TestConnectionOutages(t *testing.T) {
+	t.Parallel()
+
+	relay := newFakeRelay(t)
+	changes := &ledger[ConnectionChange]{items: nil, mu: sync.Mutex{}}
+	logs := &bytes.Buffer{}
+	base := time.Date(2026, time.November, 10, 12, 0, 0, 0, time.UTC)
+	clockCalls := 0
+	notified := make(chan struct{}, 8)
+	opts := quiet()
+	opts.Initial = []protocol.Subscription{subA()}
+	opts.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	opts.Now = func() time.Time {
+		at := base.Add(time.Duration(clockCalls) * time.Minute)
+		clockCalls++
+
+		return at
+	}
+	opts.OnConnection = func(_ context.Context, change ConnectionChange) {
+		changes.add(change)
+
+		notified <- struct{}{}
+	}
+	client := New(opts)
+	client.opts.Dial = relay.dial
+	retrying := make(chan struct{}, 16)
+	resume := make(chan time.Time, 16)
+	client.after = func(time.Duration) <-chan time.Time {
+		retrying <- struct{}{}
+
+		return resume
+	}
+	first := make(chan struct{})
+	client.opts.OnRestored = func(context.Context, int) { close(first) }
+	client, stop := relay.run(t, client)
+	waitRetry(t, first)
+
+	assertConnectionChanges(t, changes, nil)
+
+	want := make([]ConnectionChange, 0, 4)
+
+	for outage := range 2 {
+		relay.failDial.Store(3)
+		relay.drop()
+		waitRetry(t, retrying)
+
+		wantDown := ConnectionChange{
+			Up: false, Since: base.Add(time.Duration(outage*2) * time.Minute),
+			At: base.Add(time.Duration(outage*2) * time.Minute),
+		}
+		want = append(want, wantDown)
+		assertConnectionChanges(t, changes, want)
+
+		failReconnects(t, relay, retrying, resume, base)
+		assertConnectionChanges(t, changes, want)
+
+		relay.setIntercept(nil)
+
+		resume <- base
+
+		waitRetry(t, notified)
+		waitRetry(t, notified)
+
+		if currentSession(client) == nil {
+			t.Fatal("recovery callback before ready")
+		}
+
+		want = append(want, ConnectionChange{Up: true, Since: wantDown.Since, At: wantDown.At.Add(time.Minute)})
+		assertConnectionChanges(t, changes, want)
+	}
+
+	stop()
+
+	assertCompletedOutages(t, changes, logs, clockCalls)
+}
+
+func waitRetry(t *testing.T, retrying <-chan struct{}) {
+	t.Helper()
+
+	select {
+	case <-retrying:
+	case <-time.After(waitLimit):
+		t.Fatal("no retry")
+	}
+}
+
+func TestRecoveryAnnouncesOnceAndShutdownIsSilent(t *testing.T) {
+	t.Parallel()
+
+	changes := &ledger[ConnectionChange]{items: nil, mu: sync.Mutex{}}
+	since := time.Date(2026, time.November, 10, 12, 0, 0, 0, time.UTC)
+	recovered := since.Add(time.Minute)
+	clockCalls := 0
+	opts := quiet()
+	opts.OnConnection = func(_ context.Context, change ConnectionChange) { changes.add(change) }
+	opts.Now = func() time.Time {
+		clockCalls++
+
+		return recovered
+	}
+	client := New(opts)
+	client.outage = &ConnectionChange{Up: false, Since: since, At: since}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	client.connectionRestored(ctx)
+	assertConnectionChanges(t, changes, nil)
+	client.connectionRestored(t.Context())
+	client.connectionRestored(t.Context())
+	assertConnectionChanges(t, changes, []ConnectionChange{{Up: true, Since: since, At: recovered}})
+
+	if clockCalls != 1 {
+		t.Errorf("clock called %d times, want once", clockCalls)
+	}
+}
+
+func assertConnectionChanges(t *testing.T, changes *ledger[ConnectionChange], want []ConnectionChange) {
+	t.Helper()
+
+	if got := changes.seen(); !slices.Equal(got, want) {
+		t.Fatalf("changes = %+v, want %+v", got, want)
+	}
+}
+
+// failReconnects steps three refused dials and a failed replay.
+func failReconnects(t *testing.T, relay *fakeRelay, retrying <-chan struct{}, resume chan<- time.Time, base time.Time) {
+	t.Helper()
+
+	for range 3 {
+		resume <- base
+
+		waitRetry(t, retrying)
+	}
+
+	// Abort a replay by ending its connection before it answers.
+	relay.setIntercept(func(_ int, _ frame) (string, bool) {
+		relay.drop()
+
+		return "", true
+	})
+
+	resume <- base
+
+	waitRetry(t, retrying)
+}
+
+func TestInitialReplayFailuresAndShutdownAreSilent(t *testing.T) {
+	t.Parallel()
+
+	relay := newFakeRelay(t)
+	relay.failDial.Store(2)
+	relay.setIntercept(func(number int, _ frame) (string, bool) {
+		if number < 3 {
+			relay.drop()
+
+			return "", true
+		}
+
+		return "", false
+	})
+
+	ready := make(chan struct{})
+	opts := quiet()
+	opts.Initial = []protocol.Subscription{subA()}
+	opts.Dial = relay.dial
+	opts.OnRestored = func(context.Context, int) { close(ready) }
+	opts.OnConnection = func(_ context.Context, change ConnectionChange) {
+		t.Errorf("initial failures or shutdown reported %+v", change)
+	}
+	client := New(opts)
+	client.after = immediately(make(chan time.Duration, 16))
+	_, stop := relay.run(t, client)
+	waitRetry(t, ready)
+	stop()
+}
+
+func assertCompletedOutages(t *testing.T, changes *ledger[ConnectionChange], logs *bytes.Buffer, clockCalls int) {
+	t.Helper()
+
+	if got := changes.seen(); len(got) != 4 {
+		t.Fatalf("shutdown reported %v", got)
+	}
+
+	if clockCalls != 4 {
+		t.Errorf("clock called %d times, want 4", clockCalls)
+	}
+
+	for _, want := range []string{
+		"level=WARN msg=\"relay connection lost\"", "level=INFO msg=\"relay connection restored\"",
+		"since=2026-11-10T12:00:00.000Z down_for=0s", "since=2026-11-10T12:00:00.000Z down_for=1m0s",
+	} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("logs lack %q:\n%s", want, logs)
 		}
 	}
 }

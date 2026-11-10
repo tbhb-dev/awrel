@@ -221,6 +221,7 @@ func newMCPCmdWithTimeout(stdin io.Reader, getenv func(string) string, requestTi
 type relayConnector func(
 	context.Context, *slog.Logger, string, *persist.Store, func(string) string, time.Duration,
 	func(context.Context, protocol.Event), func(context.Context, int),
+	func(context.Context, relayclient.ConnectionChange),
 ) (mcpserver.Relay, func(context.Context))
 
 // serveMCP runs the MCP server on stdin and stdout until the input ends or a
@@ -250,6 +251,9 @@ func serveMCP(
 		},
 		func(ctx context.Context, count int) {
 			server.Restored(ctx, count)
+		},
+		func(ctx context.Context, change relayclient.ConnectionChange) {
+			server.Connection(ctx, change)
 		},
 	)
 	server = mcpserver.New(mcpserver.Options{
@@ -294,6 +298,7 @@ func connectRelay(
 	requestTimeout time.Duration,
 	onEvent func(context.Context, protocol.Event),
 	onRestored func(context.Context, int),
+	onConnection func(context.Context, relayclient.ConnectionChange),
 ) (mcpserver.Relay, func(context.Context)) {
 	if endpoint == "" {
 		logger.ErrorContext(ctx, "no relay endpoint; every tool will fail", "error", errNoEndpoint)
@@ -313,13 +318,15 @@ func connectRelay(
 	store, initial := restoreSession(saved, (*persist.Store).Load)
 
 	client := relayclient.New(relayclient.Options{
-		Dial:       dialer.Dial,
-		OnEvent:    onEvent,
-		Logger:     logger,
-		Store:      store,
-		OnRestored: onRestored,
-		Initial:    initial,
-		Rand:       nil,
+		Dial:         dialer.Dial,
+		OnEvent:      onEvent,
+		Logger:       logger,
+		Store:        store,
+		OnRestored:   onRestored,
+		OnConnection: onConnection,
+		Now:          nil,
+		Initial:      initial,
+		Rand:         nil,
 		// gomutants:disable-next-line INTEGER_INCREMENT,INTEGER_DECREMENT reason="zero picks the default"
 		MinBackoff: 0,
 		// gomutants:disable-next-line INTEGER_INCREMENT,INTEGER_DECREMENT reason="zero picks the default"

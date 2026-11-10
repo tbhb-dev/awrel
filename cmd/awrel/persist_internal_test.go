@@ -26,6 +26,7 @@ import (
 	"go.tbhb.dev/awrel/internal/mcpserver"
 	"go.tbhb.dev/awrel/internal/persist"
 	"go.tbhb.dev/awrel/internal/protocol"
+	"go.tbhb.dev/awrel/internal/relayclient"
 )
 
 const (
@@ -327,11 +328,16 @@ func TestServeMCPAnnouncesInjectedRestore(t *testing.T) {
 	connect := func(
 		_ context.Context, _ *slog.Logger, _ string, _ *persist.Store, _ func(string) string, _ time.Duration,
 		_ func(context.Context, protocol.Event), onRestored func(context.Context, int),
+		onConnection func(context.Context, relayclient.ConnectionChange),
 	) (mcpserver.Relay, func(context.Context)) {
 		return unconnectedRelay{err: errNoEndpoint}, func(ctx context.Context) {
 			select {
 			case <-restored:
 				onRestored(ctx, 2)
+
+				since := time.Date(2026, time.November, 10, 12, 0, 0, 0, time.UTC)
+				onConnection(ctx, relayclient.ConnectionChange{Up: false, Since: since, At: since})
+				onConnection(ctx, relayclient.ConnectionChange{Up: true, Since: since, At: since.Add(time.Second)})
 			case <-ctx.Done():
 			}
 		}
@@ -347,6 +353,8 @@ func TestServeMCPAnnouncesInjectedRestore(t *testing.T) {
 	running.await(t, false, `"id":9`)
 	close(restored)
 	running.await(t, false, "restored 2 subscriptions from the previous run")
+	running.await(t, false, "relay connection lost at 2026-11-10T12:00:00Z")
+	running.await(t, false, "relay connection restored at 2026-11-10T12:00:01Z")
 
 	err := running.finish(t)
 	if err != nil {
