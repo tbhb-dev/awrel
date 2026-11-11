@@ -1167,6 +1167,105 @@ func TestCauseAfterConnectionLoss(t *testing.T) {
 	eventuallyNotConnected(t, client, ErrClosed)
 }
 
+func TestLiveReadErrorIsLoggedAtInfo(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+
+	relay := newFakeRelay(t)
+	lost := make(chan ConnectionChange, 1)
+	opts := quiet()
+	opts.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	opts.MinBackoff = time.Hour
+	opts.MaxBackoff = time.Hour
+	opts.OnConnection = func(_ context.Context, change ConnectionChange) { lost <- change }
+	client, stop := relay.start(t, opts)
+
+	ctx, cancel := context.WithTimeout(t.Context(), waitLimit)
+	defer cancel()
+
+	_, err := client.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	relay.drop()
+	receive(t, lost, "connection loss")
+	stop()
+
+	found := false
+
+	for line := range strings.SplitSeq(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+
+		decodeErr := json.Unmarshal([]byte(line), &record)
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+
+		if record["msg"] != "relay connection closed" {
+			continue
+		}
+
+		found = true
+
+		if record["level"] != "WARN" || record["error"] == nil || record["error"] == "" {
+			t.Errorf("read error record = %v, want WARN with an error", record)
+		}
+	}
+
+	if !found {
+		t.Fatalf("no relay connection closed record in %s", &logs)
+	}
+}
+
+func TestCancelledReadErrorIsSilentAtInfo(t *testing.T) {
+	t.Parallel()
+
+	for _, timeout := range []bool{false, true} {
+		t.Run(fmt.Sprintf("keepalive_timeout=%t", timeout), func(t *testing.T) {
+			t.Parallel()
+
+			var logs bytes.Buffer
+
+			relay := newFakeRelay(t)
+			lost := make(chan ConnectionChange, 1)
+			opts := quiet()
+			opts.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+			opts.MinBackoff = time.Hour
+			opts.MaxBackoff = time.Hour
+			opts.OnConnection = func(_ context.Context, change ConnectionChange) { lost <- change }
+
+			if timeout {
+				relay.noPong.Store(true)
+
+				opts.PingInterval = tick
+				opts.PongTimeout = tick
+			}
+
+			client, stop := relay.start(t, opts)
+
+			ctx, cancel := context.WithTimeout(t.Context(), waitLimit)
+			defer cancel()
+
+			_, err := client.List(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if timeout {
+				receive(t, lost, "keepalive connection loss")
+			}
+
+			stop()
+
+			if strings.Contains(logs.String(), "relay connection closed") {
+				t.Fatalf("cancelled read error reached the INFO handler: %s", &logs)
+			}
+		})
+	}
+}
+
 func TestShutdownCloseIsLogged(t *testing.T) {
 	t.Parallel()
 
@@ -1179,12 +1278,14 @@ func TestShutdownCloseIsLogged(t *testing.T) {
 	stop()
 
 	// The clean close succeeds. The second close, after the reader ended, fails.
-	records := logs.matching("close the relay connection")
-	if len(records) != 1 {
-		t.Fatalf("close failures logged = %d, want 1", len(records))
-	}
+	for _, message := range []string{"close the relay connection", "read from the relay"} {
+		records := logs.matching(message)
+		if len(records) != 1 {
+			t.Fatalf("%q failures logged = %d, want 1", message, len(records))
+		}
 
-	wantFailedClose(t, records)
+		wantFailedClose(t, records)
+	}
 }
 
 func TestRequestIDsAreDecimal(t *testing.T) {

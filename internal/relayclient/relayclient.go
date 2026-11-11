@@ -355,7 +355,7 @@ func (c *Client) session(ctx context.Context) bool {
 	go func() {
 		defer close(sess.done)
 
-		c.readLoop(readCtx, conn)
+		c.readLoop(ctx, readCtx, conn)
 	}()
 
 	err = c.resubscribe(ctx, sess)
@@ -570,12 +570,17 @@ func (c *Client) dropFromMirror(sub protocol.Subscription) {
 }
 
 // readLoop is the only caller of Conn.Read. It returns when the read fails.
-func (c *Client) readLoop(ctx context.Context, conn *transport.Conn) {
+func (c *Client) readLoop(sessionCtx, ctx context.Context, conn *transport.Conn) {
 	for {
 		data, err := conn.Read(ctx)
 		// gomutants:disable-next-line BRANCH_IF reason="without this exit the loop spins on a dead connection"
 		if err != nil {
-			c.opts.Logger.DebugContext(ctx, "read from the relay", slog.Any("error", err))
+			// The reader's context ignores graceful session shutdown.
+			if sessionCtx.Err() == nil && ctx.Err() == nil {
+				c.opts.Logger.WarnContext(ctx, "relay connection closed", slog.Any("error", err))
+			} else {
+				c.opts.Logger.DebugContext(ctx, "read from the relay", slog.Any("error", err))
+			}
 
 			return
 		}
