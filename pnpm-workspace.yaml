@@ -7,3 +7,7 @@
 # no lifecycle script may run.
 
 allowBuilds: {}
+
+# Lock refreshes skip versions younger than 5 days (7200 minutes), the
+# same cooldown Renovate applies to version bumps.
+minimumReleaseAge: 7200
