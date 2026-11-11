@@ -35,7 +35,9 @@ jobs:
   bazel:
     name: "bazel (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # macOS gets 75 minutes: on a cold cache its tests alone took 38
+    # minutes, and the release build still has to run after them.
+    timeout-minutes: ${{ matrix.os == 'macos-26' && 75 || 45 }}
     strategy:
       fail-fast: false
       matrix:
