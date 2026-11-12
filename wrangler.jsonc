@@ -11,8 +11,10 @@
 // SQLite-backed Durable Object that the Worker hands webhook events and MCP
 // connections to; its migrations deploy with the script. CF_VERSION_METADATA
 // gives the Worker its version id, which it returns on every response so the
-// deploy's checks can tell which version answered. The top level, which
-// deploys nowhere, is what the workerd tests run against.
+// deploy's checks can tell which version answered. Each deployed environment
+// keeps Workers Logs, which also covers the Durable Object, and samples every
+// request. The top level, which deploys nowhere, is what the workerd tests run
+// against.
 {
   "name": "awrel",
   "main": "src/index.ts",
@@ -28,6 +30,7 @@
       "name": "awrel-stg",
       "workers_dev": false,
       "version_metadata": { "binding": "CF_VERSION_METADATA" },
+      "observability": { "enabled": true, "head_sampling_rate": 1 },
       "durable_objects": {
         "bindings": [{ "name": "RELAY", "class_name": "Relay" }]
       }
@@ -36,6 +39,7 @@
       "name": "awrel-prd",
       "workers_dev": false,
       "version_metadata": { "binding": "CF_VERSION_METADATA" },
+      "observability": { "enabled": true, "head_sampling_rate": 1 },
       "durable_objects": {
         "bindings": [{ "name": "RELAY", "class_name": "Relay" }]
       }

@@ -2,13 +2,12 @@
 description: Deploy the Worker and Durable Object, create the GitHub App, and point the awrel server at your own relay.
 generated:
   - role: generated
-    harness: claude-code:2.1.319
+    harness: claude-code:2.1.322
     model: anthropic:claude-sonnet-5-5
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    subagent: sha-256-64:95a8c6deb0220742
-    at: "2026-11-08T03:43:57Z"
+    at: "2026-11-12T22:31:30Z"
 status: stable
 tags: [docs, self-host, deploy]
 title: Self-host a relay
@@ -36,7 +35,7 @@ Clone the repository and install its dependencies. The Worker is `src/index.ts`,
 }
 ```
 
-Keep the `RELAY` binding, `version_metadata` and `migrations`. Delete the `env` block, which holds the maintainers' two environments, and use the top level.
+Keep the `RELAY` binding, `version_metadata` and `migrations`. Delete the `env` block, which holds the maintainers' two environments, and use the top level. The maintainers' environments turn on Workers Logs. To get logs for yours, add the same `observability` block at the top level: `"observability": { "enabled": true, "head_sampling_rate": 1 }`.
 
 Deploy with `npx wrangler deploy`.
 
