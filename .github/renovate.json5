@@ -7,11 +7,11 @@
   // The presets track tbhb-dev/renovate-config's main branch, pinned by
   // commit; Renovate bumps the pins (the "renovate-config" group).
   extends: [
-    "github>tbhb-dev/renovate-config//default.json5#db8570694276be04a0b96740b578b1ca06f2c8f4", // main
-    "github>tbhb-dev/renovate-config//bazel.json5#db8570694276be04a0b96740b578b1ca06f2c8f4", // main
-    "github>tbhb-dev/renovate-config//cloudflare-worker.json5#db8570694276be04a0b96740b578b1ca06f2c8f4", // main
-    "github>tbhb-dev/renovate-config//go.json5#db8570694276be04a0b96740b578b1ca06f2c8f4", // main
-    "github>tbhb-dev/renovate-config//python.json5#db8570694276be04a0b96740b578b1ca06f2c8f4", // main
+    "github>tbhb-dev/renovate-config//default.json5#a4217a7c162ed39216b343f85e48f712665a93a8", // main
+    "github>tbhb-dev/renovate-config//bazel.json5#a4217a7c162ed39216b343f85e48f712665a93a8", // main
+    "github>tbhb-dev/renovate-config//cloudflare-worker.json5#a4217a7c162ed39216b343f85e48f712665a93a8", // main
+    "github>tbhb-dev/renovate-config//go.json5#a4217a7c162ed39216b343f85e48f712665a93a8", // main
+    "github>tbhb-dev/renovate-config//python.json5#a4217a7c162ed39216b343f85e48f712665a93a8", // main
   ],
 
   // awrel needs nothing beyond the presets: its Go module, Bazel pins and uv
