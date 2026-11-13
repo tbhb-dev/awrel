@@ -10,6 +10,13 @@ const TIMESTAMP_PATTERN = /^[0-9]{1,15}$/;
 const WEB_LINK_PATTERN = /^https?:\/\//i;
 const TIMESTAMP_TOLERANCE_SECONDS = 300;
 
+/**
+ * The header that carries the Unix-seconds timestamp. Grafana documents no
+ * name for it: the contact point's "Timestamp Header" field must be set to
+ * exactly this, and Grafana then signs `<timestamp>:<body>`.
+ */
+export const TIMESTAMP_HEADER = "X-Grafana-Alerting-Timestamp";
+
 // Whether `header` is the 64-digit hex HMAC-SHA256 of `<timestamp>:<body>`
 // under `secret`. The check is Web Crypto's verify, which compares in
 // constant time. The pattern admits exactly 64 hex digits, so a trailing odd
@@ -186,7 +193,7 @@ export async function receiveGrafana(
   if (body === null) {
     return new Response("Payload Too Large", { status: 413 });
   }
-  const timestamp = headerOf(request, "X-Grafana-Alerting-Timestamp");
+  const timestamp = headerOf(request, TIMESTAMP_HEADER);
   const header = headerOf(request, "X-Grafana-Alerting-Signature");
   if (
     !fresh(timestamp) ||

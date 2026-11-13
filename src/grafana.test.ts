@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Tony Burns
 
-import { exports } from "cloudflare:workers";
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.ts";
-import { receiveGrafana } from "./grafana.ts";
+import { receiveGrafana, TIMESTAMP_HEADER } from "./grafana.ts";
 import {
   connect,
   digest,
@@ -68,7 +67,7 @@ async function post(delivery: Delivery = {}): Promise<Response> {
       : delivery.signature;
   const headers = new Headers();
   if (timestamp !== null) {
-    headers.set("X-Grafana-Alerting-Timestamp", timestamp);
+    headers.set(TIMESTAMP_HEADER, timestamp);
   }
   if (signature !== null) {
     headers.set("X-Grafana-Alerting-Signature", signature);
@@ -273,6 +272,10 @@ describe("signature", () => {
 });
 
 describe("timestamp", () => {
+  it("names the header the contact point must set", () => {
+    expect(TIMESTAMP_HEADER).toBe("X-Grafana-Alerting-Timestamp");
+  });
+
   async function expectUnauthorized(delivery: Delivery): Promise<void> {
     const response = await post(delivery);
     expect(response.status).toBe(401);
@@ -296,15 +299,21 @@ describe("timestamp", () => {
     });
   });
 
-  it.each(["abc", "", "-1", "1.5", "1e3", "1234567890123456", `+${NOW_SECONDS}`, `${NOW_SECONDS}e0`])(
-    "rejects the malformed timestamp %j",
-    async (timestamp) => {
-      await expectUnauthorized({
-        timestamp,
-        signature: await sign(DEFAULT_BODY, timestamp),
-      });
-    },
-  );
+  it.each([
+    "abc",
+    "",
+    "-1",
+    "1.5",
+    "1e3",
+    "1234567890123456",
+    `+${NOW_SECONDS}`,
+    `${NOW_SECONDS}e0`,
+  ])("rejects the malformed timestamp %j", async (timestamp) => {
+    await expectUnauthorized({
+      timestamp,
+      signature: await sign(DEFAULT_BODY, timestamp),
+    });
+  });
 
   it("accepts a timestamp exactly 5 minutes old or ahead", async () => {
     for (const offset of [-300, 300]) {
@@ -325,28 +334,37 @@ describe("secret", () => {
   it.each([
     ["empty", ""],
     ["absent", undefined],
-  ])("answers 503 and publishes nothing with an %s secret", async (_, secret) => {
-    const messages = await connect(relay(), {
-      subscriptions: [{ provider: "grafana" }],
-    });
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const response = await receiveGrafana(
-      new Request("https://awrel.example/webhooks/grafana", {
-        method: "POST",
-        body: DEFAULT_BODY,
-        headers: {
-          "X-Grafana-Alerting-Timestamp": NOW_SECONDS,
-          "X-Grafana-Alerting-Signature": await sign(DEFAULT_BODY, NOW_SECONDS, "unused"),
-        },
-      }),
-      { ...env, GRAFANA_WEBHOOK_SECRET: secret } as unknown as Env,
-    );
-    await settle();
-    expect(response.status).toBe(503);
-    expect(await response.text()).toBe("Service Unavailable");
-    expect(logSpy).toHaveBeenCalledWith("grafana webhook secret is not set");
-    expect(messages).toStrictEqual([]);
-  });
+  ])(
+    "answers 503 and publishes nothing with an %s secret",
+    async (_, secret) => {
+      const messages = await connect(relay(), {
+        subscriptions: [{ provider: "grafana" }],
+      });
+      const logSpy = vi
+        .spyOn(console, "log")
+        .mockImplementation(() => undefined);
+      const response = await receiveGrafana(
+        new Request("https://awrel.example/webhooks/grafana", {
+          method: "POST",
+          body: DEFAULT_BODY,
+          headers: {
+            [TIMESTAMP_HEADER]: NOW_SECONDS,
+            "X-Grafana-Alerting-Signature": await sign(
+              DEFAULT_BODY,
+              NOW_SECONDS,
+              "unused",
+            ),
+          },
+        }),
+        { ...env, GRAFANA_WEBHOOK_SECRET: secret } as unknown as Env,
+      );
+      await settle();
+      expect(response.status).toBe(503);
+      expect(await response.text()).toBe("Service Unavailable");
+      expect(logSpy).toHaveBeenCalledWith("grafana webhook secret is not set");
+      expect(messages).toStrictEqual([]);
+    },
+  );
 });
 
 describe("request", () => {
@@ -365,7 +383,7 @@ describe("request", () => {
       new Request("https://awrel.example/webhooks/grafana", {
         method: "POST",
         headers: {
-          "X-Grafana-Alerting-Timestamp": NOW_SECONDS,
+          [TIMESTAMP_HEADER]: NOW_SECONDS,
           "X-Grafana-Alerting-Signature": await sign(""),
         },
       }),
@@ -692,10 +710,22 @@ describe("relayed event", () => {
     });
     const events = (await received({ body })) as { payload: unknown }[];
     expect(events.map((e) => e.payload)).toStrictEqual([
-      { status: "firing", host: "host-a", html_url: "https://grafana.example/d/1" },
+      {
+        status: "firing",
+        host: "host-a",
+        html_url: "https://grafana.example/d/1",
+      },
       { status: "firing", host: "host-a" },
-      { status: "firing", host: "host-a", html_url: "HTTPS://grafana.example/d/3" },
-      { status: "firing", host: "host-a", html_url: "http://grafana.example/d/4" },
+      {
+        status: "firing",
+        host: "host-a",
+        html_url: "HTTPS://grafana.example/d/3",
+      },
+      {
+        status: "firing",
+        host: "host-a",
+        html_url: "http://grafana.example/d/4",
+      },
     ]);
   });
 });

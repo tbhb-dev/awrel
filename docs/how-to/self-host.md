@@ -7,7 +7,7 @@ generated:
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-12T22:31:30Z"
+    at: "2026-11-13T16:46:24Z"
 status: stable
 tags: [docs, self-host, deploy]
 title: Self-host a relay
@@ -41,21 +41,23 @@ Deploy with `npx wrangler deploy`.
 
 ## Set the secrets
 
-The Worker reads two secrets and nothing else:
+The Worker reads three secrets and nothing else:
 
 | Secret | Use |
 | --- | --- |
 | `GITHUB_WEBHOOK_SECRET` | The secret that signs each webhook delivery. The Worker answers 401 to a delivery whose `X-Hub-Signature-256` header doesn't match. |
+| `GRAFANA_WEBHOOK_SECRET` | The secret that signs each Grafana alert delivery. The Worker answers 503 when it's empty and 401 to a delivery whose signature or timestamp doesn't check out. |
 | `CONNECT_TOKEN` | The bearer token that `awrel mcp` presents on `/connect`. |
 
 Pick a long random value for each, and keep them out of version control:
 
 ```sh
 npx wrangler secret put GITHUB_WEBHOOK_SECRET
+npx wrangler secret put GRAFANA_WEBHOOK_SECRET
 npx wrangler secret put CONNECT_TOKEN
 ```
 
-Wrangler prompts for each value. Give `GITHUB_WEBHOOK_SECRET` the same value you enter in the GitHub App below.
+Wrangler prompts for each value. Give `GITHUB_WEBHOOK_SECRET` the same value you enter in the GitHub App below, and `GRAFANA_WEBHOOK_SECRET` the same value you enter in the Grafana contact point.
 
 ## Create the GitHub app
 
@@ -69,6 +71,19 @@ In your GitHub account or organization settings, create a GitHub App with these 
 The Worker relays whatever events the App sends. It answers a `ping` event without relaying it. Agents choose an event type and repository with each `subscribe` call: `{"provider":"github","event":"pull_request","repository":"owner/name"}`.
 
 Deploy a relay with subscription filter support before using filtered tools. The client probes support on every connection and refuses incompatible relays. The [subscription filter examples](../../README.md#subscription-filters) cover completed check failures, exact check names, workflow paths, and removal. Filters narrow the events the App already sends.
+
+## Create the Grafana contact point
+
+Skip this section if you don't relay Grafana alerts. In Grafana, add a webhook contact point with these settings:
+
+- URL: `https://relay.example.com/webhooks/grafana`, with your relay host.
+- HTTP method: `POST`.
+- Optional settings, HMAC signature secret: the value of `GRAFANA_WEBHOOK_SECRET`.
+- Optional settings, Timestamp Header: exactly `X-Grafana-Alerting-Timestamp`.
+
+Grafana names no default for the timestamp header, and the field is optional there, but the Worker requires it. With the field set, Grafana signs `<unix-seconds>:<body>` and sends the signature in `X-Grafana-Alerting-Signature`, a 64-digit hexadecimal Hash-based Message Authentication Code (HMAC) of that input. The Worker answers 401 when the timestamp is missing or more than five minutes from its clock. The window bounds a replayed delivery and the Worker keeps no record of earlier deliveries, so a captured request can repeat inside it.
+
+An alert becomes an event when its `host_name` label is a host name of up to 100 letters, digits, dots, hyphens, and underscores, and its status is `firing` or `resolved`. Agents subscribe with `{"provider":"grafana","event":"alert.firing","repository":"hosts/<host_name>"}`.
 
 ## Install the app
 
