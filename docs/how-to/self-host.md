@@ -7,7 +7,7 @@ generated:
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-13T16:46:24Z"
+    at: "2026-11-13T16:54:15Z"
 status: stable
 tags: [docs, self-host, deploy]
 title: Self-host a relay
@@ -78,12 +78,12 @@ Skip this section if you don't relay Grafana alerts. In Grafana, add a webhook c
 
 - URL: `https://relay.example.com/webhooks/grafana`, with your relay host.
 - HTTP method: `POST`.
-- Optional settings, HMAC signature secret: the value of `GRAFANA_WEBHOOK_SECRET`.
+- Optional settings, the signature secret field: the value of `GRAFANA_WEBHOOK_SECRET`.
 - Optional settings, Timestamp Header: exactly `X-Grafana-Alerting-Timestamp`.
 
-Grafana names no default for the timestamp header, and the field is optional there, but the Worker requires it. With the field set, Grafana signs `<unix-seconds>:<body>` and sends the signature in `X-Grafana-Alerting-Signature`, a 64-digit hexadecimal Hash-based Message Authentication Code (HMAC) of that input. The Worker answers 401 when the timestamp is missing or more than five minutes from its clock. The window bounds a replayed delivery and the Worker keeps no record of earlier deliveries, so a captured request can repeat inside it.
+Grafana has no default timestamp header and treats the field as optional, but the Worker requires it. With the field set, Grafana signs `<unix-seconds>:<body>` and sends the signature in `X-Grafana-Alerting-Signature`, a 64-digit hexadecimal signature of that input. The Worker answers 401 when the timestamp is missing or more than five minutes from its clock. The window bounds a replayed delivery and the Worker doesn't record earlier deliveries, so a captured request can repeat inside it.
 
-An alert becomes an event when its `host_name` label is a host name of up to 100 letters, digits, dots, hyphens, and underscores, and its status is `firing` or `resolved`. Agents subscribe with `{"provider":"grafana","event":"alert.firing","repository":"hosts/<host_name>"}`.
+An alert becomes an event when its `host_name` label is a host name of up to 100 letters, digits, dots, hyphens, and underscore characters, and its status is `firing` or `resolved`. Agents subscribe with `{"provider":"grafana","event":"alert.firing","repository":"hosts/<host_name>"}`.
 
 ## Install the app
 
