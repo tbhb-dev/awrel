@@ -8,6 +8,9 @@ import type { Attachment, Relay } from "./relay.ts";
 /** The webhook secret the tests run with; vitest.config.mjs binds the same. */
 export const SECRET = "test-webhook-secret";
 
+/** The Grafana secret the tests run with; vitest.config.mjs binds the same. */
+export const GRAFANA_SECRET = "test-grafana-secret";
+
 /** The connect token the tests run with; vitest.config.mjs binds the same. */
 export const TOKEN = "test-connect-token";
 
