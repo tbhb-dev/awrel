@@ -5,20 +5,25 @@ import type { Env } from "./env.ts";
 
 const MAX_BODY_BYTES = 1_048_576;
 const HOST_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,100}$/;
+const SIGNATURE_PATTERN = /^[0-9a-fA-F]{64}$/;
+const TIMESTAMP_PATTERN = /^[0-9]{1,15}$/;
+const WEB_LINK_PATTERN = /^https?:\/\//i;
+const TIMESTAMP_TOLERANCE_SECONDS = 300;
 
-// Whether `header` is the 64-digit hex HMAC-SHA256 of `body` under `secret`.
-// The check is Web Crypto's verify, which compares in constant time. The
-// digest must be 64 hex digits, so a trailing odd digit or `sha256=` prefix
-// can't ride along; non-hex digits decode to bytes that can't match.
+// Whether `header` is the 64-digit hex HMAC-SHA256 of `<timestamp>:<body>`
+// under `secret`. The check is Web Crypto's verify, which compares in
+// constant time. The pattern admits exactly 64 hex digits, so a trailing odd
+// digit or `sha256=` prefix can't ride along.
 async function signed(
   secret: string,
+  timestamp: string,
   body: ArrayBuffer,
-  header: string | null,
+  header: string,
 ): Promise<boolean> {
-  if (header?.length !== 64) {
+  if (!SIGNATURE_PATTERN.test(header)) {
     return false;
   }
-  const signature = Uint8Array.from({ length: header.length >> 1 }, (_, i) =>
+  const signature = Uint8Array.from({ length: 32 }, (_, i) =>
     Number.parseInt(header.slice(2 * i, 2 * i + 2), 16),
   );
   const key = await crypto.subtle.importKey(
@@ -29,7 +34,58 @@ async function signed(
     false,
     ["verify"],
   );
-  return crypto.subtle.verify("HMAC", key, signature, body);
+  const prefix = new TextEncoder().encode(`${timestamp}:`);
+  const input = new Uint8Array(prefix.byteLength + body.byteLength);
+  input.set(prefix, 0);
+  input.set(new Uint8Array(body), prefix.byteLength);
+  return crypto.subtle.verify("HMAC", key, signature, input);
+}
+
+// Whether `timestamp` is Unix seconds within the tolerance of the clock.
+function fresh(timestamp: string): boolean {
+  return (
+    TIMESTAMP_PATTERN.test(timestamp) &&
+    Math.abs(Date.now() / 1000 - Number(timestamp)) <=
+      TIMESTAMP_TOLERANCE_SECONDS
+  );
+}
+
+// The header's value, or "" when it's missing, which no pattern here accepts.
+function headerOf(request: Request, name: string): string {
+  // Stryker disable next-line StringLiteral: any non-matching fallback behaves like "", since the patterns reject both
+  return request.headers.get(name) ?? "";
+}
+
+// The request body, or null once it passes the size cap. It reads the stream
+// chunk by chunk, so a chunked upload without a Content-Length stops at the
+// cap instead of being buffered whole.
+async function readBody(request: Request): Promise<ArrayBuffer | null> {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (request.body !== null) {
+    const reader =
+      request.body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      size += value.byteLength;
+      if (size > MAX_BODY_BYTES) {
+        // Stryker disable next-line all: cancelling only releases the upload early; the 413 is the same either way
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body.buffer;
 }
 
 // Deterministic delivery ID `gf-<32 hex>` from SHA-256(body || 0x3a || i), so
@@ -64,6 +120,13 @@ function text(source: unknown, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+// The string at `key` when it's an http(s) URL, else undefined.
+function webLink(source: unknown, key: string): string | undefined {
+  const value = text(source, key);
+  // Stryker disable next-line StringLiteral: any fallback the pattern rejects behaves like "", and value is undefined whenever it applies
+  return WEB_LINK_PATTERN.test(value ?? "") ? value : undefined;
+}
+
 // Extracts the relay event fields for a single Grafana alert entry, or returns
 // null when the entry is malformed, targets an invalid host_name, or has a
 // status other than firing/resolved. Only the allowlisted string fields are
@@ -80,7 +143,7 @@ function toAlert(entry: unknown): GrafanaAlert | null {
   ) {
     return null;
   }
-  const link = text(raw, "panelURL") || text(raw, "dashboardURL") || undefined;
+  const link = webLink(raw, "panelURL") ?? webLink(raw, "dashboardURL");
   const fields = {
     alertname: text(labels, "alertname"),
     status,
@@ -103,23 +166,32 @@ function toAlert(entry: unknown): GrafanaAlert | null {
 }
 
 /**
- * Answers a Grafana Alerting webhook delivery: rejects oversized payloads,
- * verifies the HMAC-SHA256 signature before parsing, validates the `alerts`
+ * Answers a Grafana Alerting webhook delivery: answers 503 without a secret,
+ * rejects oversized payloads, requires a timestamp within five minutes and
+ * verifies the HMAC-SHA256 signature over `<timestamp>:<body>` before parsing, validates the `alerts`
  * envelope, and publishes each valid host alert sequentially to the relay.
  */
 export async function receiveGrafana(
   request: Request,
   env: Env,
 ): Promise<Response> {
+  if (!env.GRAFANA_WEBHOOK_SECRET) {
+    console.log("grafana webhook secret is not set");
+    return new Response("Service Unavailable", { status: 503 });
+  }
   if (Number(request.headers.get("Content-Length")) > MAX_BODY_BYTES) {
     return new Response("Payload Too Large", { status: 413 });
   }
-  const body = await request.arrayBuffer();
-  if (body.byteLength > MAX_BODY_BYTES) {
+  const body = await readBody(request);
+  if (body === null) {
     return new Response("Payload Too Large", { status: 413 });
   }
-  const header = request.headers.get("X-Grafana-Alerting-Signature");
-  if (!(await signed(env.GRAFANA_WEBHOOK_SECRET, body, header))) {
+  const timestamp = headerOf(request, "X-Grafana-Alerting-Timestamp");
+  const header = headerOf(request, "X-Grafana-Alerting-Signature");
+  if (
+    !fresh(timestamp) ||
+    !(await signed(env.GRAFANA_WEBHOOK_SECRET, timestamp, body, header))
+  ) {
     return new Response("Unauthorized", { status: 401 });
   }
   let parsed: unknown;
