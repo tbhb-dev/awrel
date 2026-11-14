@@ -2,7 +2,20 @@
 // Copyright Tony Burns
 
 import { DurableObject } from "cloudflare:workers";
-import { handle, limit, type Subscription } from "./protocol.ts";
+import {
+  CAP_EVENTS,
+  CAP_MINUTES,
+  charge,
+  delivered,
+  forget,
+  forgetOthers,
+} from "./cap.ts";
+import {
+  handle,
+  limit,
+  type Subscription,
+  unboundedCheck,
+} from "./protocol.ts";
 
 /** A webhook event, as the relay hands it to subscribed connections. */
 export interface RelayEvent {
@@ -26,6 +39,39 @@ function eventFrame(
  */
 export interface Attachment {
   readonly subscriptions: readonly Subscription[];
+  /** Names the connection's delivery counts; set on its first matching event. */
+  readonly id?: string;
+}
+
+function thisMinute(): number {
+  return Math.floor(Date.now() / 60_000);
+}
+
+// Tells the connection that the relay removed a subscription, and why.
+function notice(
+  socket: WebSocket,
+  subscription: Subscription,
+  reason: "unfiltered" | "rate_cap",
+  message: string,
+): void {
+  try {
+    socket.send(
+      eventFrame({
+        provider: "awrel",
+        event: "notice",
+        delivery: crypto.randomUUID(),
+        payload: {
+          code: "subscription_removed",
+          reason,
+          message,
+          subscription,
+          limit: { events: CAP_EVENTS, minutes: CAP_MINUTES },
+        },
+      }),
+    );
+  } catch {
+    // The socket is closing; it has no subscriptions left to lose.
+  }
 }
 
 // Read only fixed fields on the event's own object, once per publication.
@@ -66,6 +112,11 @@ function matches(
   );
 }
 
+/** The id of a connection, or "undefined" for one that never subscribed. */
+export function connectionId(attachment: Attachment | null): string {
+  return String(attachment?.id);
+}
+
 /**
  * The relay between webhook providers and MCP connections. One instance
  * holds every connection, as hibernatable WebSockets.
@@ -78,6 +129,55 @@ export class Relay extends DurableObject {
     ctx.setWebSocketAutoResponse(
       new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}'),
     );
+    // A new version drops the subscriptions that an older one accepted and
+    // this one refuses, and the counts of connections that are gone.
+    const live = new Set<string>();
+    for (const socket of ctx.getWebSockets()) {
+      const attachment = this.screen(
+        socket,
+        socket.deserializeAttachment() as Attachment | null,
+      );
+      live.add(connectionId(attachment));
+    }
+    forgetOthers(ctx.storage.kv, live);
+  }
+
+  // Removes the stored subscriptions that a check refuses, with a notice for
+  // each, and returns the attachment as it stands afterwards.
+  private screen(
+    socket: WebSocket,
+    attachment: Attachment | null,
+  ): Attachment | null {
+    if (attachment === null) return null;
+    const refusals = attachment.subscriptions.flatMap((subscription) => {
+      const message = unboundedCheck(subscription);
+      return message === null ? [] : [{ subscription, message }];
+    });
+    if (refusals.length === 0) return attachment;
+    const next: Attachment = {
+      ...attachment,
+      subscriptions: attachment.subscriptions.filter(
+        (subscription) => unboundedCheck(subscription) === null,
+      ),
+    };
+    socket.serializeAttachment(next);
+    for (const { subscription, message } of refusals) {
+      notice(socket, subscription, "unfiltered", message);
+    }
+    return next;
+  }
+
+  /** Forgets the delivery counts of a connection that closed. */
+  override webSocketClose(ws: WebSocket): void {
+    forget(
+      this.ctx.storage.kv,
+      (ws.deserializeAttachment() as Attachment | null)?.id,
+    );
+  }
+
+  /** Forgets the delivery counts of a connection that failed. */
+  override webSocketError(ws: WebSocket): void {
+    this.webSocketClose(ws);
   }
 
   /** Accepts a connection the Worker has already checked (src/connect.ts). */
@@ -97,11 +197,15 @@ export class Relay extends DurableObject {
     ws: WebSocket,
     message: string | ArrayBuffer,
   ): void {
-    const { subscriptions } = ws.deserializeAttachment() as Attachment;
-    const outcome = handle(subscriptions, message);
+    const attachment = this.screen(
+      ws,
+      ws.deserializeAttachment() as Attachment,
+    ) as Attachment;
+    const outcome = handle(attachment.subscriptions, message);
     if (outcome.next !== null) {
       try {
         ws.serializeAttachment({
+          ...attachment,
           subscriptions: outcome.next,
         } satisfies Attachment);
       } catch {
@@ -123,31 +227,75 @@ export class Relay extends DurableObject {
         }),
       );
     }
-    ws.send(JSON.stringify(outcome.reply));
+    const { reply } = outcome;
+    ws.send(
+      JSON.stringify(
+        reply.type === "subscriptions"
+          ? {
+              ...reply,
+              delivered_last_hour: delivered(
+                this.ctx.storage.kv,
+                attachment.id,
+                reply.subscriptions,
+                thisMinute(),
+              ),
+            }
+          : reply,
+      ),
+    );
   }
 
   /**
    * Sends the event to every connection with a matching subscription, and
-   * returns how many connections it reached.
+   * returns how many connections it reached. Each matching subscription is
+   * charged one delivery; one that is over its cap is removed with a notice.
    */
   publish(event: RelayEvent): number {
     const message = eventFrame(event);
     const fields = filterFields(event);
+    const minute = thisMinute();
     let reached = 0;
     for (const socket of this.ctx.getWebSockets()) {
-      const attachment = socket.deserializeAttachment() as Attachment | null;
-      if (
-        attachment?.subscriptions.some((s) => matches(s, event, fields)) ===
-        true
-      ) {
-        // One socket that fails mid-close mustn't stop the others from
-        // receiving the event, or fail the webhook.
-        try {
-          socket.send(message);
-          reached += 1;
-        } catch {
-          // Not reached, so not counted.
-        }
+      const screened = this.screen(
+        socket,
+        socket.deserializeAttachment() as Attachment | null,
+      );
+      if (screened === null) continue;
+      const matched = screened.subscriptions.filter((s) =>
+        matches(s, event, fields),
+      );
+      if (matched.length === 0) continue;
+      const id = screened.id ?? crypto.randomUUID();
+      const { within, tripped } = charge(
+        this.ctx.storage.kv,
+        id,
+        matched,
+        minute,
+      );
+      if (tripped.length > 0 || screened.id === undefined) {
+        socket.serializeAttachment({
+          subscriptions: screened.subscriptions.filter(
+            (s) => !tripped.includes(s),
+          ),
+          id,
+        } satisfies Attachment);
+      }
+      for (const subscription of tripped) {
+        notice(
+          socket,
+          subscription,
+          "rate_cap",
+          `removed: it matched more than ${String(CAP_EVENTS)} events in ${String(CAP_MINUTES)} minutes; subscribe again with narrower filters such as name, conclusion or action`,
+        );
+      }
+      if (within.length === 0) continue;
+      // One socket that fails mid-close mustn't stop the others from
+      // receiving the event, or fail the webhook.
+      try {
+        socket.send(message);
+        reached += 1;
+      } catch {
+        // Not reached, so not counted.
       }
     }
     return reached;

@@ -2,10 +2,11 @@
 // Copyright Tony Burns
 
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
-import { afterEach, expect, it } from "vitest";
-import { limit, type Subscription } from "./protocol.ts";
-import type { RelayEvent } from "./relay.ts";
+import { afterEach, describe, expect, it } from "vitest";
+import { limit, type Subscription, unboundedCheck } from "./protocol.ts";
+import { type Attachment, connectionId, type RelayEvent } from "./relay.ts";
 import {
+  type Client,
   connect,
   dial,
   disconnectAll,
@@ -156,6 +157,7 @@ const subscriptions = (id: string, entries: Subscription[]) => ({
   type: "subscriptions",
   id,
   subscriptions: entries,
+  delivered_last_hour: entries.map(() => 0),
 });
 
 it("removes an older event-only subscription from a live socket", async () => {
@@ -337,6 +339,7 @@ it("reaches the other connections when one send fails", async () => {
   );
   const broken = {
     deserializeAttachment: () => ({ subscriptions: [{ provider: "github" }] }),
+    serializeAttachment: () => undefined,
     send: () => {
       throw new Error("closing");
     },
@@ -385,6 +388,7 @@ async function publishFilteredTo(
     const messages: string[] = [];
     const socket = {
       deserializeAttachment: () => ({ subscriptions: [subscription] }),
+      serializeAttachment: () => undefined,
       send: (message: string) => messages.push(message),
     } as unknown as WebSocket;
     const original = state.getWebSockets.bind(state);
@@ -419,20 +423,24 @@ const WORKFLOW: RelayEvent = {
   },
 };
 
-it.each(["check_run", "check_suite", "workflow_run", "workflow_job"])(
+it.each(["check_run", "workflow_run", "workflow_job"])(
   "matches %s conclusion from its own object and action from the payload",
   async (event) => {
     const subscription = {
       provider: "github",
       event,
       repository: "owner/repo",
+      name: "build",
       action: ["created", "completed"],
       conclusion: ["success", "future_value"],
     };
     const { reached, messages } = await publishFilteredTo(subscription, {
       ...EVENT,
       event,
-      payload: { action: "completed", [event]: { conclusion: "future_value" } },
+      payload: {
+        action: "completed",
+        [event]: { conclusion: "future_value", name: "build" },
+      },
     });
     expect(reached).toBe(1);
     expect(messages).toHaveLength(1);
@@ -530,13 +538,18 @@ it("does not use a nested check suite conclusion in a check run", async () => {
       provider: "github",
       event: "check_run",
       repository: "owner/repo",
+      name: "build",
       conclusion: ["failure"],
     },
     {
       ...EVENT,
       event: "check_run",
       payload: {
-        check_run: { conclusion: null, check_suite: { conclusion: "failure" } },
+        check_run: {
+          name: "build",
+          conclusion: null,
+          check_suite: { conclusion: "failure" },
+        },
         check_suite: { conclusion: "failure" },
         conclusion: "failure",
       },
@@ -623,7 +636,7 @@ it("stores canonical filters, echoes capability, and preserves the attachment on
   ).toStrictEqual({ ...subscriptions("f", []), subscription_filters: true });
 });
 
-it.each(["check_run", "check_suite", "workflow_run", "workflow_job"])(
+it.each(["check_run", "workflow_run", "workflow_job"])(
   "rejects absent and non-string fields on %s without consulting other objects",
   async (event) => {
     await runInDurableObject(relay(), (instance, state) => {
@@ -631,11 +644,13 @@ it.each(["check_run", "check_suite", "workflow_run", "workflow_job"])(
         provider: "github",
         event,
         repository: "owner/repo",
+        name: "build",
         conclusion: ["failure"],
       };
       const sent: string[] = [];
       const socket = {
         deserializeAttachment: () => ({ subscriptions: [subscription] }),
+        serializeAttachment: () => undefined,
         send: (message: string) => sent.push(message),
       } as unknown as WebSocket;
       const original = state.getWebSockets.bind(state);
@@ -654,7 +669,10 @@ it.each(["check_run", "check_suite", "workflow_run", "workflow_job"])(
             instance.publish({
               ...EVENT,
               event,
-              payload: { [event]: { conclusion }, conclusion: "failure" },
+              payload: {
+                [event]: { conclusion, name: "build" },
+                conclusion: "failure",
+              },
             }),
           ).toBe(0);
         }
@@ -663,7 +681,7 @@ it.each(["check_run", "check_suite", "workflow_run", "workflow_job"])(
           instance.publish({
             ...EVENT,
             event,
-            payload: { [event]: { conclusion: "failure" } },
+            payload: { [event]: { conclusion: "failure", name: "build" } },
           }),
         ).toBe(1);
         expect(sent).toHaveLength(1);
@@ -703,6 +721,7 @@ it("extracts payload filters once per publication and reuses them across sockets
     const sent: string[] = [];
     const socket = {
       deserializeAttachment: () => ({ subscriptions: [FILTERED] }),
+      serializeAttachment: () => undefined,
       send: (message: string) => sent.push(message),
     } as unknown as WebSocket;
     const original = state.getWebSockets.bind(state);
@@ -765,4 +784,318 @@ it("echoes only to the requesting socket, before acknowledging, without matching
   expect(await exchange(other, list)).toStrictEqual(
     subscriptions("l", [{ provider: "awrel" }]),
   );
+});
+
+describe("check subscriptions and the delivery cap", () => {
+  const PUSH = {
+    provider: "github",
+    event: "push",
+    repository: "owner/repo",
+  };
+  const UNNAMED = {
+    provider: "github",
+    event: "check_run",
+    repository: "owner/repo",
+  };
+  const SUITE = { ...UNNAMED, event: "check_suite" };
+
+  interface Frame {
+    type: string;
+    event?: string;
+    delivery?: string;
+  }
+
+  // The frames a client received, parsed.
+  const frames = (client: { received: string[] }) =>
+    client.received.map((m) => JSON.parse(m) as Frame);
+
+  // The reply to a request after any notices that came before it.
+  const ask = async (client: Client, frame: string) => {
+    client.socket.send(frame);
+    await settle();
+    return JSON.parse(client.received.at(-1) ?? "null") as unknown;
+  };
+
+  // Replaces what the relay stored for the only live socket.
+  const plant = (attachment: Attachment) =>
+    runInDurableObject(relay(), (_instance, state) => {
+      state.getWebSockets()[0]?.serializeAttachment(attachment);
+    });
+
+  const attachments = () =>
+    runInDurableObject(relay(), (_instance, state) =>
+      state
+        .getWebSockets()
+        .map((socket) => socket.deserializeAttachment() as Attachment),
+    );
+
+  it("refuses to subscribe to check_run without a name", async () => {
+    const client = await dial();
+    expect(await exchange(client, subscribe("s", UNNAMED))).toStrictEqual({
+      type: "error",
+      id: "s",
+      code: "bad_subscription",
+      message: unboundedCheck(UNNAMED),
+    });
+    expect(await exchange(client, list)).toStrictEqual(subscriptions("l", []));
+  });
+
+  it("removes stored unnamed checks at the next message, with a notice each", async () => {
+    const client = await dial();
+    await plant({ subscriptions: [UNNAMED, PUSH, SUITE] });
+    expect(await ask(client, list)).toStrictEqual(subscriptions("l", [PUSH]));
+    const [first, second] = frames(client);
+    for (const [notice, subscription] of [
+      [first, UNNAMED],
+      [second, SUITE],
+    ] as const) {
+      expect(notice).toMatchObject({
+        type: "event",
+        provider: "awrel",
+        event: "notice",
+        payload: {
+          code: "subscription_removed",
+          reason: "unfiltered",
+          message: unboundedCheck(subscription),
+          subscription,
+          limit: { events: 100, minutes: 5 },
+        },
+      });
+      expect(notice?.delivery).toMatch(/^[0-9a-f-]{36}$/);
+    }
+    expect(client.received).toHaveLength(3);
+  });
+
+  it("removes stored unnamed checks when an event arrives", async () => {
+    const client = await dial();
+    await plant({ subscriptions: [UNNAMED, PUSH] });
+    expect(await relay().publish(EVENT)).toBe(1);
+    await settle();
+    expect(frames(client).map((f) => f.event)).toStrictEqual([
+      "notice",
+      "push",
+    ]);
+    expect(await attachments()).toMatchObject([{ subscriptions: [PUSH] }]);
+  });
+
+  it("removes stored unnamed checks from a relay that wakes with them", async () => {
+    const client = await dial();
+    await plant({ subscriptions: [SUITE] });
+    await evictDurableObject(relay());
+    await runInDurableObject(relay(), () => undefined);
+    await settle();
+    expect(frames(client)).toMatchObject([
+      { event: "notice", payload: { subscription: SUITE } },
+    ]);
+    expect(await attachments()).toMatchObject([{ subscriptions: [] }]);
+  });
+
+  it("drops the counts of connections that are gone when it wakes", async () => {
+    const client = await dial();
+    await exchange(client, subscribe("s", PUSH));
+    await relay().publish(EVENT);
+    await runInDurableObject(relay(), (_instance, state) => {
+      state.storage.kv.put("c:ghost", {});
+    });
+    await evictDurableObject(relay());
+    const keys = await runInDurableObject(relay(), (_instance, state) =>
+      [...state.storage.kv.list({ prefix: "c:" })].map(([key]) => key),
+    );
+    const [{ id }] = (await attachments()) as [Attachment];
+    expect(keys).toStrictEqual([`c:${String(id)}`]);
+  });
+
+  it("counts deliveries and shows the last hour beside each subscription", async () => {
+    const client = await dial();
+    await exchange(client, subscribe("s", PUSH));
+    for (let i = 0; i < 3; i += 1) await relay().publish(EVENT);
+    expect(await exchange(client, list)).toStrictEqual({
+      type: "subscriptions",
+      id: "l",
+      subscriptions: [PUSH],
+      delivered_last_hour: [3],
+    });
+  });
+
+  it("keeps the counts out of the stored subscriptions", async () => {
+    const client = await dial();
+    await exchange(client, subscribe("s", PUSH));
+    await relay().publish(EVENT);
+    const [stored] = await attachments();
+    expect(stored?.subscriptions).toStrictEqual([PUSH]);
+    expect(Object.keys(stored ?? {}).sort()).toStrictEqual([
+      "id",
+      "subscriptions",
+    ]);
+  });
+
+  it("keeps the connection's id when a subscription changes", async () => {
+    const client = await dial();
+    await exchange(client, subscribe("s", PUSH));
+    await relay().publish(EVENT);
+    const [before] = await attachments();
+    await exchange(client, subscribe("t", { ...PUSH, event: "issues" }));
+    const [after] = await attachments();
+    expect(after?.id).toBe(before?.id);
+    expect(after?.subscriptions).toHaveLength(2);
+  });
+
+  it("removes a subscription on the event past the cap, and tells the session once", async () => {
+    const client = await dial();
+    await exchange(client, subscribe("s", PUSH));
+    for (let i = 0; i < 100; i += 1) {
+      expect(await relay().publish(EVENT)).toBe(1);
+    }
+    expect(await relay().publish(EVENT)).toBe(0);
+    expect(await relay().publish(EVENT)).toBe(0);
+    await settle();
+    const received = frames(client);
+    expect(received.filter((f) => f.event === "push")).toHaveLength(100);
+    const notices = received.filter((f) => f.event === "notice");
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      provider: "awrel",
+      payload: {
+        code: "subscription_removed",
+        reason: "rate_cap",
+        message:
+          "removed: it matched more than 100 events in 5 minutes; subscribe again with narrower filters such as name, conclusion or action",
+        subscription: PUSH,
+        limit: { events: 100, minutes: 5 },
+      },
+    });
+    expect(await exchange(client, list)).toStrictEqual(subscriptions("l", []));
+  });
+
+  it("keeps delivering to a subscription that shares the event with a capped one", async () => {
+    const client = await dial();
+    const other = { ...PUSH, repository: "OWNER/repo" };
+    await exchange(client, subscribe("s", PUSH));
+    await plant({
+      subscriptions: [PUSH, { provider: "github", event: "push" }],
+    });
+    for (let i = 0; i < 100; i += 1) await relay().publish(EVENT);
+    expect(other.repository.toLowerCase()).toBe(PUSH.repository);
+    expect(await relay().publish(EVENT)).toBe(0);
+    await settle();
+    expect(await exchange(client, list)).toMatchObject({
+      subscriptions: [],
+    });
+  });
+
+  it("counts across an eviction", async () => {
+    const client = await dial();
+    await exchange(client, subscribe("s", PUSH));
+    for (let i = 0; i < 60; i += 1) await relay().publish(EVENT);
+    await evictDurableObject(relay());
+    for (let i = 0; i < 40; i += 1) {
+      expect(await relay().publish(EVENT)).toBe(1);
+    }
+    await evictDurableObject(relay());
+    expect(await relay().publish(EVENT)).toBe(0);
+    expect(await exchange(client, list)).toMatchObject({ subscriptions: [] });
+  });
+
+  it("forgets a connection's counts when it closes", async () => {
+    const client = await dial();
+    await exchange(client, subscribe("s", PUSH));
+    await relay().publish(EVENT);
+    const [{ id }] = (await attachments()) as [Attachment];
+    const stored = () =>
+      runInDurableObject(relay(), (_instance, state) =>
+        state.storage.kv.get(`c:${String(id)}`),
+      );
+    expect(await stored()).toBeDefined();
+    client.socket.close(1000);
+    await settle();
+    expect(await stored()).toBeUndefined();
+  });
+
+  it("forgets a connection's counts when it fails", async () => {
+    const calls: Array<string | undefined> = [];
+    await runInDurableObject(relay(), (instance, state) => {
+      state.storage.kv.put("c:x", {});
+      instance.webSocketError({
+        deserializeAttachment: () => ({ subscriptions: [], id: "x" }),
+      } as unknown as WebSocket);
+      calls.push(String(state.storage.kv.get("c:x")));
+    });
+    expect(calls).toStrictEqual(["undefined"]);
+  });
+
+  it("does not fail when a notice cannot be sent", async () => {
+    const reached = await runInDurableObject(relay(), (instance, state) => {
+      const socket = {
+        deserializeAttachment: () => ({ subscriptions: [SUITE] }),
+        serializeAttachment: () => undefined,
+        send: () => {
+          throw new Error("closing");
+        },
+      } as unknown as WebSocket;
+      const original = state.getWebSockets.bind(state);
+      state.getWebSockets = () => [socket];
+      try {
+        return instance.publish(EVENT);
+      } finally {
+        state.getWebSockets = original;
+      }
+    });
+    expect(reached).toBe(0);
+  });
+
+  it("wakes with a connection that never subscribed", async () => {
+    await dial();
+    await evictDurableObject(relay());
+    expect(await relay().publish(EVENT)).toBe(0);
+  });
+
+  it("closes a connection that never subscribed", async () => {
+    await runInDurableObject(relay(), (instance) => {
+      expect(() => {
+        instance.webSocketClose({
+          deserializeAttachment: () => null,
+        } as unknown as WebSocket);
+      }).not.toThrow();
+    });
+  });
+
+  it("gives a stored connection an id once an event matches it", async () => {
+    await dial();
+    await plant({ subscriptions: [PUSH] });
+    expect(await relay().publish(EVENT)).toBe(1);
+    const [stored] = await attachments();
+    expect(stored?.id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("leaves a connection without a matching subscription as it was", async () => {
+    await dial();
+    await plant({ subscriptions: [PUSH] });
+    expect(await relay().publish({ ...EVENT, event: "issues" })).toBe(0);
+    const [stored] = await attachments();
+    expect(stored).toStrictEqual({ subscriptions: [PUSH] });
+  });
+
+  it("writes the attachment only when the id or the list changes", async () => {
+    const writes: unknown[] = [];
+    await runInDurableObject(relay(), (instance, state) => {
+      const socket = {
+        deserializeAttachment: () => ({ subscriptions: [PUSH], id: "fixed" }),
+        serializeAttachment: (value: unknown) => writes.push(value),
+        send: () => undefined,
+      } as unknown as WebSocket;
+      const original = state.getWebSockets.bind(state);
+      state.getWebSockets = () => [socket];
+      try {
+        instance.publish(EVENT);
+      } finally {
+        state.getWebSockets = original;
+      }
+    });
+    expect(writes).toStrictEqual([]);
+  });
+
+  it("names a connection by its id, and one that never subscribed by none", () => {
+    expect(connectionId({ subscriptions: [], id: "x" })).toBe("x");
+    expect(connectionId(null)).toBe("undefined");
+  });
 });
