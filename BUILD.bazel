@@ -409,6 +409,7 @@ worker_types_test(
 WORKER_SECRETS = {
     "CONNECT_TOKEN": "CONNECT_TOKEN",
     "GITHUB_WEBHOOK_SECRET": "GITHUB_WEBHOOK_SECRET",
+    "GRAFANA_WEBHOOK_SECRET": "GRAFANA_WEBHOOK_SECRET",
 }
 
 worker_deploy(
@@ -418,6 +419,7 @@ worker_deploy(
     pass_env = [
         "CONNECT_TOKEN",
         "GITHUB_WEBHOOK_SECRET",
+        "GRAFANA_WEBHOOK_SECRET",
     ],
     post_deploy = ["//e2e:check"],
     pre_deploy = ["//e2e:check"],
@@ -433,6 +435,7 @@ worker_deploy(
     pass_env = [
         "CONNECT_TOKEN",
         "GITHUB_WEBHOOK_SECRET",
+        "GRAFANA_WEBHOOK_SECRET",
     ],
     post_deploy = ["//e2e:check"],
     pre_deploy = ["//e2e:check"],

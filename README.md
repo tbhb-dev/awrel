@@ -125,7 +125,7 @@ A successful check name doesn't establish success on the current pull request he
 
 ## Worker
 
-The Worker and its Durable Object are in `src/`, configured by `wrangler.jsonc`, and their tests run inside `workerd`, the Workers runtime. After a change to `wrangler.jsonc`, `bazelisk run //:worker_types_test.update` regenerates `worker-configuration.d.ts`. The Worker accepts GitHub App webhooks at `POST /webhooks/github` and checks each delivery's signature against `GITHUB_WEBHOOK_SECRET`. It answers a `ping` event without relaying it. To deploy your own, see [Self-host a relay](docs/how-to/self-host.md).
+The Worker and its Durable Object are in `src/`, configured by `wrangler.jsonc`, and their tests run inside `workerd`, the Workers runtime. After a change to `wrangler.jsonc`, `bazelisk run //:worker_types_test.update` regenerates `worker-configuration.d.ts`. The Worker accepts GitHub App webhooks at `POST /webhooks/github` and checks each delivery's signature against `GITHUB_WEBHOOK_SECRET`. It answers a `ping` event without relaying it. Grafana alerts arrive at `POST /webhooks/grafana`, and become one event per alert in the repository `hosts/<host_name>`. A signature in `X-Grafana-Alerting-Signature` must match `GRAFANA_WEBHOOK_SECRET` over `<timestamp>:<body>`, and the timestamp in `X-Grafana-Alerting-Timestamp` must fall within five minutes of the Worker's clock. To deploy your own, see [Self-host a relay](docs/how-to/self-host.md).
 
 ## Contributing
 
