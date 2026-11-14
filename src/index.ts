@@ -4,6 +4,7 @@
 import { connect } from "./connect.ts";
 import type { Env } from "./env.ts";
 import { receiveGitHub } from "./github.ts";
+import { receiveGrafana } from "./grafana.ts";
 
 export { Relay } from "./relay.ts";
 
@@ -13,9 +14,11 @@ export default {
     const response =
       request.method === "POST" && pathname === "/webhooks/github"
         ? await receiveGitHub(request, env)
-        : request.method === "GET" && pathname === "/connect"
-          ? await connect(request, env)
-          : new Response("Not Found", { status: 404 });
+        : request.method === "POST" && pathname === "/webhooks/grafana"
+          ? await receiveGrafana(request, env)
+          : request.method === "GET" && pathname === "/connect"
+            ? await connect(request, env)
+            : new Response("Not Found", { status: 404 });
     // Awrel-Worker-Version names the version that answered, so a deploy's
     // checks can confirm they reached the version they meant to test. The
     // name is spelled out here, not in a module constant, so a mutation test
