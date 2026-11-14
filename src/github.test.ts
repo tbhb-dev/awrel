@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Tony Burns
 
-import { exports } from "cloudflare:workers";
-import { afterEach, describe, expect, it } from "vitest";
+import { env, exports } from "cloudflare:workers";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Env } from "./env.ts";
+import { receiveGitHub } from "./github.ts";
 import {
   connect,
   digest,
@@ -234,4 +236,40 @@ describe("relayed event", () => {
     expect(hit).toHaveLength(1);
     expect(miss).toEqual([]);
   });
+});
+
+describe("secret", () => {
+  it.each([
+    ["empty", ""],
+    ["absent", undefined],
+  ])(
+    "answers 503 and publishes nothing with an %s secret",
+    async (_, secret) => {
+      const messages = await connect(relay(), {
+        subscriptions: [{ provider: "github" }],
+      });
+      const logSpy = vi
+        .spyOn(console, "log")
+        .mockImplementation(() => undefined);
+      const body = "{}";
+      const response = await receiveGitHub(
+        new Request("https://awrel.example/webhooks/github", {
+          method: "POST",
+          body,
+          headers: {
+            "X-Hub-Signature-256": await sign(body, "unused"),
+            "X-GitHub-Event": "push",
+            "X-GitHub-Delivery": "d-1",
+          },
+        }),
+        { ...env, GITHUB_WEBHOOK_SECRET: secret } as unknown as Env,
+      );
+      await settle();
+      expect(response.status).toBe(503);
+      expect(await response.text()).toBe("Service Unavailable");
+      expect(logSpy).toHaveBeenCalledWith("github webhook secret is not set");
+      expect(messages).toStrictEqual([]);
+      logSpy.mockRestore();
+    },
+  );
 });

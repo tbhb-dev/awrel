@@ -43,12 +43,17 @@ function repositoryOf(payload: unknown): string | null {
 /**
  * Answers a GitHub App webhook delivery: checks its signature against the
  * App's webhook secret, then hands the event to the relay. The signature is
- * checked before anything else in the request is read.
+ * checked before anything else in the request is read. Without a secret it
+ * answers 503 and reads nothing.
  */
 export async function receiveGitHub(
   request: Request,
   env: Env,
 ): Promise<Response> {
+  if (!env.GITHUB_WEBHOOK_SECRET) {
+    console.log("github webhook secret is not set");
+    return new Response("Service Unavailable", { status: 503 });
+  }
   const body = await request.arrayBuffer();
   const header = request.headers.get("X-Hub-Signature-256");
   if (!(await signed(env.GITHUB_WEBHOOK_SECRET, body, header))) {
