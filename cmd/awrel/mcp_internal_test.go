@@ -609,7 +609,7 @@ func TestEventsReachTheAgent(t *testing.T) {
 	running.handshake(t)
 	running.send(t, subscribeCall)
 	running.await(t, false, `"id":2`)
-	running.await(t, false, `"method":"notifications/claude/channel"`)
+	running.await(t, false, `"delivery":"d1"`)
 
 	out := running.out.String()
 	for _, want := range []string{`"event":"issue_comment"`, `"repository":"o/r"`, `"delivery":"d1"`} {
@@ -635,9 +635,17 @@ func eventMarkedCompact(t *testing.T, vars map[string]string, args ...string) bo
 	running := startSession(t, env(vars), 0, args...)
 	running.handshake(t)
 	running.send(t, subscribeCall)
-	running.await(t, false, `"method":"notifications/claude/channel"`)
+	running.await(t, false, `"delivery":"d1"`)
 
-	marked := strings.Contains(running.out.String(), `"compact":"true"`)
+	var marked bool
+
+	for line := range strings.SplitSeq(running.out.String(), "\n") {
+		if strings.Contains(line, `"delivery":"d1"`) {
+			marked = strings.Contains(line, `"compact":"true"`)
+
+			break
+		}
+	}
 
 	err := running.finish(t)
 	if err != nil {
