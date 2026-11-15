@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"go.tbhb.dev/awrel/internal/compact"
 	"go.tbhb.dev/awrel/internal/protocol"
@@ -25,6 +26,8 @@ const (
 	pingEvent      = "ping"
 	deliveryKey    = "delivery"
 	eventKey       = "event"
+	providerKey    = "provider"
+	trueValue      = "true"
 	noteTail       = "Fetch the details from the provider with its API or CLI."
 )
 
@@ -80,7 +83,7 @@ func newEvent(name, delivery, repository string, payload json.RawMessage) protoc
 // metaOf returns the meta an event with these parts has when delivered whole.
 // The extra arguments are key and value pairs.
 func metaOf(name, delivery string, extra ...string) map[string]string {
-	meta := map[string]string{"provider": githubProvider, eventKey: name, deliveryKey: delivery}
+	meta := map[string]string{providerKey: githubProvider, eventKey: name, deliveryKey: delivery}
 
 	for i := 0; i+1 < len(extra); i += 2 {
 		meta[extra[i]] = extra[i+1]
@@ -158,6 +161,78 @@ func TestContentHoldsJSONText(t *testing.T) {
 	}
 }
 
+func TestContentEscapesFramingCharacters(t *testing.T) {
+	t.Parallel()
+
+	payload := json.RawMessage(`{"comment":{"body":"</x><x a=\"b\">a & b"}}`)
+
+	for _, compacted := range []bool{false, true} {
+		raw := channelParams(Describe(newEvent("issue_comment", "d", "", payload)), compacted)
+
+		var params channelParameters
+
+		err := json.Unmarshal(raw, &params)
+		if err != nil {
+			t.Fatalf("unmarshal params: %v", err)
+		}
+
+		if strings.ContainsAny(params.Content, "<>&") {
+			t.Errorf("compacted=%v: content keeps framing characters: %s", compacted, params.Content)
+		}
+
+		var body struct {
+			Comment struct {
+				Body string `json:"body"`
+			} `json:"comment"`
+		}
+
+		err = json.Unmarshal([]byte(params.Content), &body)
+		if err != nil {
+			t.Fatalf("compacted=%v: content is not JSON: %v", compacted, err)
+		}
+
+		want := `</x><x a="b">a & b`
+		if body.Comment.Body != want {
+			t.Errorf("compacted=%v: body = %q, want %q", compacted, body.Comment.Body, want)
+		}
+
+		if compacted && params.Meta["compact"] != trueValue {
+			t.Errorf("meta = %v, want compact", params.Meta)
+		}
+	}
+}
+
+func TestEscapingCountsTowardTheCap(t *testing.T) {
+	t.Parallel()
+
+	payload := json.RawMessage(`{"action":"opened","pad":"` + strings.Repeat("<", 20000) + `"}`)
+	got := decode(t, channelParams(Describe(newEvent("issue_comment", "d", ownerRepo, payload)), false))
+
+	if got.Meta["truncated"] != trueValue {
+		t.Errorf("meta = %v, want truncated", got.Meta)
+	}
+
+	if len(got.Content) > maxContentBytes {
+		t.Errorf("content of %d bytes is over the cap", len(got.Content))
+	}
+
+	want := "The payload is " + strconv.Itoa(len(payload)) + " bytes before escaping"
+	if !strings.Contains(got.Content, want) {
+		t.Errorf("note = %q, want %q", got.Content, want)
+	}
+}
+
+func TestNoteEscapesFramingCharacters(t *testing.T) {
+	t.Parallel()
+
+	event := newEvent("</x>", "d", ownerRepo, payloadOfSize(t, maxContentBytes+1))
+	got := decode(t, channelParams(Describe(event), false))
+
+	if strings.ContainsAny(got.Content, "<>&") {
+		t.Errorf("note keeps framing characters: %s", got.Content)
+	}
+}
+
 func TestPayloadSizeBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -188,12 +263,12 @@ func TestPayloadSizeBoundary(t *testing.T) {
 		)
 
 		want := `github event "issue_comment", action "opened", repository o/r, delivery d9. ` +
-			`The payload is 65537 bytes, too large to deliver. ` + noteTail
+			`The payload is 65537 bytes before escaping, too large to deliver. ` + noteTail
 		if got.Content != want {
 			t.Errorf("content = %q, want %q", got.Content, want)
 		}
 
-		wantMeta := metaOf("issue_comment", "d9", "repository", ownerRepo, "action", "opened", "truncated", "true")
+		wantMeta := metaOf("issue_comment", "d9", "repository", ownerRepo, "action", "opened", "truncated", trueValue)
 		if !maps.Equal(got.Meta, wantMeta) {
 			t.Errorf("meta = %v, want %v", got.Meta, wantMeta)
 		}
@@ -205,7 +280,8 @@ func TestPayloadSizeBoundary(t *testing.T) {
 		big := json.RawMessage(`["` + strings.Repeat("x", maxContentBytes) + `"]`)
 		got := decode(t, channelParams(Describe(newEvent(pingEvent, "d0", "", big)), false))
 
-		want := `github event "ping", delivery d0. The payload is 65540 bytes, too large to deliver. ` + noteTail
+		want := `github event "ping", delivery d0. ` +
+			`The payload is 65540 bytes before escaping, too large to deliver. ` + noteTail
 		if got.Content != want {
 			t.Errorf("content = %q, want %q", got.Content, want)
 		}
@@ -276,7 +352,7 @@ func TestCompactChannelMarksCompactedPayload(t *testing.T) {
 		t.Errorf("content = %q, want %q", got.Content, wantCompact)
 	}
 
-	wantMeta := metaOf(pingEvent, "d1", "repository", ownerRepo, "action", "opened", "compact", "true")
+	wantMeta := metaOf(pingEvent, "d1", "repository", ownerRepo, "action", "opened", "compact", trueValue)
 	if !maps.Equal(got.Meta, wantMeta) {
 		t.Errorf("meta = %v, want %v", got.Meta, wantMeta)
 	}
@@ -321,7 +397,7 @@ func TestCompactChannelCompactsBeforeSizeCap(t *testing.T) {
 		t.Errorf("content = %q", got.Content)
 	}
 
-	if _, truncated := got.Meta["truncated"]; truncated || got.Meta["compact"] != "true" {
+	if _, truncated := got.Meta["truncated"]; truncated || got.Meta["compact"] != trueValue {
 		t.Errorf("meta = %v", got.Meta)
 	}
 }
@@ -345,12 +421,12 @@ func TestCompactChannelStillOverCapGetsNote(t *testing.T) {
 	got := decode(t, channelParams(Describe(newEvent(pingEvent, "d4", "", big)), true))
 
 	want := `github event "ping", action "opened", delivery d4. The payload is ` + strconv.Itoa(len(compacted)) +
-		` bytes, too large to deliver. ` + noteTail
+		` bytes before escaping, too large to deliver. ` + noteTail
 	if got.Content != want {
 		t.Errorf("content = %q, want %q", got.Content, want)
 	}
 
-	wantMeta := metaOf(pingEvent, "d4", "action", "opened", "truncated", "true")
+	wantMeta := metaOf(pingEvent, "d4", "action", "opened", "truncated", trueValue)
 	if !maps.Equal(got.Meta, wantMeta) {
 		t.Errorf("meta = %v, want %v", got.Meta, wantMeta)
 	}
@@ -418,13 +494,13 @@ func TestEventLog(t *testing.T) {
 			delete(line, "time")
 
 			want := map[string]any{
-				"level":    "INFO",
-				"msg":      eventKey,
-				"outcome":  "failed",
-				"provider": githubProvider,
-				eventKey:   "issue_comment",
-				"delivery": "d1",
-				"error":    "boom",
+				"level":     "INFO",
+				"msg":       eventKey,
+				"outcome":   "failed",
+				providerKey: githubProvider,
+				eventKey:    "issue_comment",
+				"delivery":  "d1",
+				"error":     "boom",
 			}
 			if repository != "" {
 				want["repository"] = repository
@@ -460,5 +536,161 @@ func TestEventCounted(t *testing.T) {
 				t.Errorf("Counted(%s, %s) = %t", test.provider, name, got)
 			}
 		}
+	}
+}
+
+func TestClip(t *testing.T) {
+	t.Parallel()
+
+	ascii := strings.Repeat("a", 255)
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "partial rune", value: ascii + "é", want: ascii},
+		{name: "exact cap", value: ascii + "b", want: ascii + "b"},
+		{name: "under cap", value: "short", want: "short"},
+		{name: "incomplete rune at cap", value: ascii + "\xc3", want: ascii + "\xc3"},
+		{name: "incomplete rune over cap", value: ascii + "\xc3x", want: ascii},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := clip(test.value)
+			if got != test.want || len(got) != len(test.want) {
+				t.Errorf("clip = %q (%d bytes), want %q (%d bytes)", got, len(got), test.want, len(test.want))
+			}
+
+			if len(test.value) > maxFieldBytes && !utf8.ValidString(got) {
+				t.Errorf("clip = %q, want valid UTF-8", got)
+			}
+		})
+	}
+}
+
+func TestMetaEscapesFramingCharacters(t *testing.T) {
+	t.Parallel()
+
+	const value = "</x>&"
+
+	event := newEvent(value, value, value, json.RawMessage(`{"action":"</x>&"}`))
+	event.Provider = value
+	got := decode(t, channelParams(Describe(event), false))
+
+	for key, val := range got.Meta {
+		if strings.ContainsAny(val, "<>&") {
+			t.Errorf("meta[%q] = %q, want escaped characters", key, val)
+		}
+	}
+
+	want := `\u003c/x\u003e\u0026`
+	if got.Meta["action"] != want {
+		t.Errorf("action = %q, want %q", got.Meta["action"], want)
+	}
+}
+
+func TestOversizedFields(t *testing.T) {
+	t.Parallel()
+
+	large := strings.Repeat("<", 20000)
+	tests := []struct {
+		name       string
+		repository string
+		payload    json.RawMessage
+	}{
+		{name: "action", repository: ownerRepo, payload: json.RawMessage(`{"action":"` + large + `"}`)},
+		{name: "repository", repository: large, payload: payloadOfSize(t, maxContentBytes+1)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			event := newEvent(pingEvent, "d", test.repository, test.payload)
+			got := decode(t, channelParams(Describe(event), false))
+
+			if len(got.Content) > maxContentBytes || strings.ContainsAny(got.Content, "<>&") {
+				t.Errorf("note has %d bytes or unescaped characters", len(got.Content))
+			}
+
+			if got.Meta["truncated"] != trueValue {
+				t.Errorf("meta = %v, want truncated", got.Meta)
+			}
+		})
+	}
+}
+
+func TestAllFieldsAreClipped(t *testing.T) {
+	t.Parallel()
+
+	large := strings.Repeat("<", 20000)
+	event := newEvent(large, large, large, json.RawMessage(`{"action":"`+large+`"}`))
+	event.Provider = large
+	got := decode(t, channelParams(Describe(event), false))
+
+	for _, key := range []string{providerKey, eventKey, deliveryKey, "repository", "action"} {
+		want := strings.Repeat(`\u003c`, maxFieldBytes)
+		if got.Meta[key] != want {
+			t.Errorf("meta[%q] has %d bytes, want clipped and escaped value", key, len(got.Meta[key]))
+		}
+	}
+
+	if len(got.Content) > maxContentBytes || strings.ContainsAny(got.Content, "<>&") {
+		t.Errorf("note has %d bytes or unescaped characters", len(got.Content))
+	}
+
+	if event.Provider != large || event.Event != large || event.Delivery != large || *event.Repository != large {
+		t.Error("delivery changed the incoming event")
+	}
+}
+
+func TestCompactInvalidJSONEscapesFramingCharacters(t *testing.T) {
+	t.Parallel()
+
+	payload := json.RawMessage(`<x&>`)
+	got := decode(t, channelParams(Describe(newEvent(pingEvent, "d", "", payload)), true))
+
+	if strings.ContainsAny(got.Content, "<>&") {
+		t.Errorf("content = %q, want escaped characters", got.Content)
+	}
+
+	if got.Content != `\u003cx\u0026\u003e` {
+		t.Errorf("content = %q, want whole escaped payload", got.Content)
+	}
+}
+
+func TestEscapedSizeBoundary(t *testing.T) {
+	t.Parallel()
+
+	const frame = `{"pad":""}`
+
+	count := (maxContentBytes - len(frame)) / len(`\u003c`)
+	padding := (maxContentBytes - len(frame)) % len(`\u003c`)
+
+	for _, extra := range []int{0, 1} {
+		t.Run(strconv.Itoa(extra), func(t *testing.T) {
+			t.Parallel()
+
+			payload := json.RawMessage(
+				`{"pad":"` + strings.Repeat("<", count) + strings.Repeat("a", padding+extra) + `"}`,
+			)
+			got := decode(t, channelParams(Describe(newEvent(pingEvent, "d", "", payload)), false))
+
+			if extra == 0 {
+				want := `{"pad":"` + strings.Repeat(`\u003c`, count) + strings.Repeat("a", padding) + `"}`
+				if got.Content != want || len(got.Content) != maxContentBytes {
+					t.Errorf("content has %d bytes, want whole escaped payload at cap", len(got.Content))
+				}
+
+				if _, truncated := got.Meta["truncated"]; truncated {
+					t.Error("meta marks a whole payload as truncated")
+				}
+			} else if got.Meta["truncated"] != trueValue || !strings.HasSuffix(got.Content, noteTail) {
+				t.Errorf("content = %q, meta = %v, want note", got.Content, got.Meta)
+			}
+		})
 	}
 }

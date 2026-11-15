@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"go.tbhb.dev/awrel/internal/compact"
 	"go.tbhb.dev/awrel/internal/protocol"
@@ -24,6 +25,7 @@ const (
 	// maxContentBytes is the largest payload delivered whole. A larger one is
 	// replaced by a short note.
 	maxContentBytes = 64 * 1024
+	maxFieldBytes   = 256
 )
 
 // Event holds the metadata extracted once for logging and delivery.
@@ -115,20 +117,26 @@ type channelParameters struct {
 // whatever is still too large. A payload that can't be compacted goes whole, without the
 // attribute compact.
 func channelParams(event Event, compacted bool) json.RawMessage {
-	action := event.Action
+	action := clip(event.Action)
+	message := event.Message
+	message.Provider = clip(message.Provider)
+	message.Event = clip(message.Event)
+	message.Delivery = clip(message.Delivery)
 
 	meta := map[string]string{
-		"provider": event.Message.Provider,
-		"event":    event.Message.Event,
-		"delivery": event.Message.Delivery,
+		"provider": neutralize(message.Provider),
+		"event":    neutralize(message.Event),
+		"delivery": neutralize(message.Delivery),
 	}
 
-	if event.Message.Repository != nil {
-		meta["repository"] = *event.Message.Repository
+	if message.Repository != nil {
+		repository := clip(*message.Repository)
+		message.Repository = &repository
+		meta["repository"] = neutralize(repository)
 	}
 
 	if action != "" {
-		meta["action"] = action
+		meta["action"] = neutralize(action)
 	}
 
 	payload := event.Message.Payload
@@ -141,17 +149,36 @@ func channelParams(event Event, compacted bool) json.RawMessage {
 		}
 	}
 
-	content := string(payload)
+	// Escaping comes first. The size cap bounds the delivered content.
+	content := neutralize(string(payload))
 
-	if len(payload) > maxContentBytes {
+	if len(content) > maxContentBytes {
 		meta["truncated"] = "true"
 		// The note replaces the body, so no compact payload is delivered.
 		delete(meta, "compact")
 
-		content = tooLargeNote(event.Message, action, len(payload))
+		content = neutralize(tooLargeNote(message, action, len(payload)))
 	}
 
 	return mustMarshal(channelParameters{Content: content, Meta: meta})
+}
+
+// neutralize escapes the framing characters in delivered content.
+func neutralize(content string) string {
+	// framing maps the characters that mark up channel content to their JSON
+	// escapes. In JSON text they occur only inside strings, so the content is
+	// the same JSON value after parsing.
+	framing := strings.NewReplacer("<", `\u003c`, ">", `\u003e`, "&", `\u0026`)
+
+	return framing.Replace(content)
+}
+
+func clip(s string) string {
+	if len(s) > maxFieldBytes {
+		return strings.ToValidUTF8(s[:maxFieldBytes], "")
+	}
+
+	return s
 }
 
 // payloadAction returns the payload's action field. It returns "" unless the
@@ -171,8 +198,8 @@ func payloadAction(payload json.RawMessage) string {
 	return parsed.Action
 }
 
-// tooLargeNote describes an event whose payload, of size bytes as delivered, is
-// too large to deliver.
+// tooLargeNote describes an event whose payload, of size bytes before escaping,
+// is too large to deliver.
 func tooLargeNote(event protocol.Event, action string, size int) string {
 	note := fmt.Sprintf("%s event %q", event.Provider, event.Event)
 
@@ -185,7 +212,7 @@ func tooLargeNote(event protocol.Event, action string, size int) string {
 	}
 
 	return note + fmt.Sprintf(
-		", delivery %s. The payload is %d bytes, too large to deliver. "+
+		", delivery %s. The payload is %d bytes before escaping, too large to deliver. "+
 			"Fetch the details from the provider with its API or CLI.",
 		event.Delivery, size,
 	)
