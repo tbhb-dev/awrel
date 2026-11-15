@@ -2,12 +2,12 @@
 description: The messages that the awrel server and the relay Durable Object exchange over the /connect WebSocket.
 generated:
   - role: generated
-    harness: claude-code:2.1.318
-    model: anthropic:claude-fable-5-2
+    harness: codex:0.164.0
+    model: openai:gpt-6.1-sol
     effort: high
-    surface: sdk-cli
-    session: sha-256-64:185bcecf12674936
-    at: "2026-11-15T02:30:42Z"
+    surface: exec
+    session: sha-256-64:e1f9eacb0dc4d8f5
+    at: "2026-11-15T07:28:30Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -28,11 +28,13 @@ Every message is one JSON text frame. A client message is at most 4096 bytes, an
 
 A subscription has `provider`, optional `event` and `repository`, and optional filters `action`, `conclusion`, `name`, and `workflow_path`. `provider` matches `^[a-z0-9-]{1,32}$`. `event` matches `^[a-z0-9_.-]{1,64}$`. `repository` is `owner/name`, with 1 to 39 characters in the owner and 1 to 100 in the name, all from `[A-Za-z0-9_.-]`. The server stores `repository` in lowercase and compares event repositories without case. The relay deduplicates and sorts each filter list, and preserves names and paths exactly. Subscriptions with equal canonical fields count as the same subscription. Each filter participates in equality. An omitted filter differs from any supplied list. A socket's subscriptions live in its attachment and end with the socket.
 
-For `github`, `subscribe` requires both `event` and `repository`. A complete subscription is `{"provider":"github","event":"check_suite","repository":"owner/name"}`. Subscribe once per event type and repository. `unsubscribe` removes only an exact canonical match, including every filter. Omitting filters removes only the unfiltered subscription. For legacy incomplete subscriptions without filters, `unsubscribe` accepts an absent `event` or `repository`. Stored subscriptions keep matching until the socket closes, without further validation. Other providers follow the preceding field rules.
+For `github`, `subscribe` requires both `event` and `repository`. A complete subscription is `{"provider":"github","event":"check_suite","repository":"owner/name","conclusion":["failure"]}`. Subscribe once per event type and repository. `unsubscribe` removes only an exact canonical match, including every filter. Omitting filters removes only the unfiltered subscription. For legacy incomplete subscriptions without filters, `unsubscribe` accepts an absent `event` or `repository`. Stored subscriptions, including those without required filters, keep matching until the socket closes, without further validation. Unsubscribe still removes them. Other providers follow the preceding field rules.
 
 ### Filters
 
 For subscribe and unsubscribe, filters require `provider: "github"` with both an `event` and a `repository`. Each supplied filter must match. A list matches when it contains the payload value. Missing, null, or non-string payload fields never match a supplied filter. Without a filter, the relay doesn't test that payload field. Names and paths compare exactly with case and spaces preserved. Wildcard characters in names are literal, and the relay keeps paths without resolution or normalization.
+
+A GitHub subscribe for `check_run`, `workflow_run`, or `workflow_job` requires `name` or `conclusion`. For `check_suite`, it requires `conclusion`. Without a required filter, subscribe returns `bad_subscription`, even for a subscription already present. An `action` or `workflow_path` filter alone doesn't suffice.
 
 | Filter | Validation | Payload field and supported events |
 | --- | --- | --- |
@@ -70,7 +72,7 @@ Filters, including JSON keys, list separators, and escapes, count toward the can
 
 | Message | Meaning |
 | --- | --- |
-| `{"type":"subscribe","id":ID,"subscription":{...}}` | Add the subscription. Adding one already present succeeds and leaves the list unchanged. |
+| `{"type":"subscribe","id":ID,"subscription":{...}}` | Add the subscription. Adding a valid one already present succeeds and leaves the list unchanged. |
 | `{"type":"unsubscribe","id":ID,"subscription":{...}}` | Remove the subscription. An absent subscription gets a `not_subscribed` reply. |
 | `{"type":"list","id":ID}` | Report the current subscriptions. |
 | `{"type":"echo","id":ID,"nonce":NONCE}` | Send an echo event back on this socket, then acknowledge it. |
@@ -107,7 +109,7 @@ An older relay answers echo with `{"type":"error","id":"ID","code":"bad_message"
 
 ### Errors
 
-Error codes are `bad_message` (not JSON, unknown `type`, missing or ill-typed envelope or base subscription field), `bad_subscription` (a field fails the subscription patterns, a GitHub subscribe lacks `event` or `repository`, or a filter has an invalid type, value, provider, event, or incomplete pair), `not_subscribed`, and `limit` (the change would push the attachment past its budget). An error leaves the subscriptions unchanged.
+Error codes are `bad_message` (not JSON, unknown `type`, missing or ill-typed envelope or base subscription field), `bad_subscription` (a field fails the subscription patterns, a GitHub subscribe lacks `event`, `repository`, or a required filter, or a filter has an invalid type, value, provider, event, or incomplete pair), `not_subscribed`, and `limit` (the change would push the attachment past its budget). An error leaves the subscriptions unchanged.
 
 Clients ignore message types they don't know. For a client message type the server doesn't know, the reply is `bad_message`.
 
@@ -118,3 +120,5 @@ A ping frame must be exactly the 15 bytes `{"type":"ping"}` to get the automatic
 ## Reconnecting
 
 A reconnect begins with an empty list. Before replaying its first filtered subscription, the Go client probes with a list request with `subscription_filters: true` and requires the capability echo. It then sends one `subscribe` per subscription it held, in order, retaining all filters. It checks capability echoes on every filtered subscribe and unsubscribe reply, and checks that the exact canonical subscription is present after subscribe and absent after unsubscribe. A missing or changed echo closes the socket and stops retries with a relay-too-old error. While validating filtered requests and reconnect replay, the client suppresses every event except those with provider `awrel` and event `notice`. After a relay-too-old error, the client suppresses those too. Older relays still work with unfiltered clients, which don't require a capability echo. The server drops events from a period without a socket permanently.
+
+When the Go client replays stored subscriptions on reconnect, it drops any subscription the relay refuses and logs a warning. After the relay deploys, the next reconnect drops stored unfiltered subscriptions for `check_run`, `check_suite`, `workflow_run`, and `workflow_job`.

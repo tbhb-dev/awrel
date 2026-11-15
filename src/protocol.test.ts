@@ -268,6 +268,68 @@ describe("subscribe", () => {
     expect(subscribe(subscription)).toStrictEqual(accepted(subscription));
   });
 
+  it.each([
+    [
+      "check_run",
+      "github check_run subscription requires a name or conclusion filter",
+    ],
+    [
+      "workflow_run",
+      "github workflow_run subscription requires a name or conclusion filter",
+    ],
+    [
+      "workflow_job",
+      "github workflow_job subscription requires a name or conclusion filter",
+    ],
+    [
+      "check_suite",
+      "github check_suite subscription requires a conclusion filter",
+    ],
+  ])("requires a filter for github %s", (event, message) => {
+    const subscription = { ...GITHUB, event };
+    expect(subscribe(subscription)).toStrictEqual(bad(message));
+    expect(subscribe({ ...subscription, action: ["completed"] })).toStrictEqual(
+      bad(message),
+    );
+    expect(
+      handle([subscription], frame("subscribe", subscription)),
+    ).toStrictEqual(bad(message));
+  });
+
+  it.each(["check_run", "workflow_run", "workflow_job"])(
+    "accepts a name alone for %s",
+    (event) => {
+      const subscription = { ...GITHUB, event, name: "CI" };
+      expect(subscribe(subscription)).toStrictEqual(accepted(subscription));
+    },
+  );
+
+  it.each(["check_run", "workflow_run", "workflow_job", "check_suite"])(
+    "accepts a conclusion alone for %s",
+    (event) => {
+      const subscription = { ...GITHUB, event, conclusion: ["failure"] };
+      expect(subscribe(subscription)).toStrictEqual(accepted(subscription));
+    },
+  );
+
+  it.each([
+    { ...GITHUB, event: "pull_request" },
+    GITHUB,
+    { ...GITHUB, provider: "gitlab", event: "check_run" },
+    { ...GITHUB, provider: "gitlab", event: "check_suite" },
+  ])(
+    "accepts unfiltered subscriptions for other events and providers: %j",
+    (subscription) => {
+      expect(subscribe(subscription)).toStrictEqual(accepted(subscription));
+      expect(
+        handle([subscription], frame("subscribe", subscription)),
+      ).toStrictEqual({
+        ...listed("i", [subscription]),
+        next: null,
+      });
+    },
+  );
+
   it("ignores unknown fields", () => {
     expect(subscribe({ ...GITHUB, extra: 1 })).toStrictEqual(accepted(GITHUB));
   });
@@ -346,6 +408,20 @@ describe("subscribe", () => {
 });
 
 describe("unsubscribe", () => {
+  it("lists and removes a stored unfiltered check_run subscription", () => {
+    const stored = { ...GITHUB, event: "check_run" };
+    expect(
+      handle([stored], JSON.stringify({ type: "list", id: "i" })),
+    ).toStrictEqual({
+      ...listed("i", [stored]),
+      next: null,
+    });
+    expect(handle([stored], frame("unsubscribe", stored))).toStrictEqual({
+      ...listed("i", []),
+      next: [],
+    });
+  });
+
   it.each([
     { provider: "github" },
     { provider: "github", event: "push" },
@@ -397,7 +473,7 @@ describe("unsubscribe", () => {
 });
 
 describe("subscription filters", () => {
-  const base = { ...GITHUB, event: "workflow_run" };
+  const base = { ...GITHUB, event: "workflow_run", name: "CI" };
   for (const field of ["action", "conclusion"] as const) {
     const message = `${field} must be a list of 1 to 8 strings matching ^[a-z0-9_.-]{1,64}$`;
     it.each(
@@ -570,7 +646,16 @@ describe("filter event support", () => {
     "workflow_run",
   ];
   it.each(actionEvents)("supports action on %s", (event) => {
-    const subscription = { ...base, event, action: ["future_action"] };
+    const subscription = {
+      ...base,
+      event,
+      action: ["future_action"],
+      ...(["check_run", "check_suite", "workflow_run", "workflow_job"].includes(
+        event,
+      )
+        ? { conclusion: ["failure"] }
+        : {}),
+    };
     expect(subscribe(subscription)).toStrictEqual(accepted(subscription));
   });
   it.each([
@@ -638,7 +723,14 @@ describe("filter event support", () => {
       };
       const supported = support[field as keyof typeof support].includes(event);
       it(`${supported ? "accepts" : "rejects"} ${field} on ${event}`, () => {
-        const subscription = { ...base, event, [field]: input };
+        const subscription = {
+          ...base,
+          event,
+          [field]: input,
+          ...(supported && (field === "action" || field === "workflow_path")
+            ? { conclusion: ["failure"] }
+            : {}),
+        };
         expect(subscribe(subscription)).toStrictEqual(
           supported
             ? accepted(subscription)
@@ -685,6 +777,7 @@ describe("filter identity and replies", () => {
 
   for (const [field, input] of Object.entries(valid)) {
     it(`includes ${field} in identity and exact removal`, () => {
+      const base = { ...GITHUB, event: "workflow_run", name: "CI" };
       const filtered = { ...base, [field]: input };
       const different = {
         ...base,

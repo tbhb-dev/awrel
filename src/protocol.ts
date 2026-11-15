@@ -171,6 +171,13 @@ const FILTERS = {
 
 type Filter = keyof typeof FILTERS;
 
+const REQUIRED_FILTERS = new Map<string, readonly Filter[]>([
+  ["github check_run", ["name", "conclusion"]],
+  ["github workflow_run", ["name", "conclusion"]],
+  ["github workflow_job", ["name", "conclusion"]],
+  ["github check_suite", ["conclusion"]],
+]);
+
 function filterError(field: Filter, input: unknown): string | null {
   if (field === "action" || field === "conclusion") {
     if (
@@ -381,17 +388,24 @@ export function handle(
     next,
   });
   if (type === "subscribe") {
-    if (subscription.provider === "github") {
-      const missing = (["event", "repository"] as const).filter(
-        (field) => subscription[field] === undefined,
+    const missing = (["event", "repository"] as const).filter(
+      (field) => subscription[field] === undefined,
+    );
+    if (subscription.provider === "github" && missing.length !== 0) {
+      return fail(
+        id,
+        "bad_subscription",
+        `github subscription is missing ${missing.join(" and ")}; subscribe once per event type and repository`,
       );
-      if (missing.length !== 0) {
-        return fail(
-          id,
-          "bad_subscription",
-          `github subscription is missing ${missing.join(" and ")}; subscribe once per event type and repository`,
-        );
-      }
+    }
+    const key = `${subscription.provider} ${subscription.event as string}`;
+    const required = REQUIRED_FILTERS.get(key);
+    if (required?.every((field) => subscription[field] === undefined)) {
+      return fail(
+        id,
+        "bad_subscription",
+        `${key} subscription requires a ${required.join(" or ")} filter`,
+      );
     }
     if (current.some((s) => same(s, subscription))) {
       return unchanged();
