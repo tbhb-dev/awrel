@@ -368,6 +368,24 @@ function read(message: string | ArrayBuffer): Outcome | Request {
   };
 }
 
+const FILTER_FIELDS = ["action", "conclusion", "name", "workflow_path"];
+
+/**
+ * Whether the client holds its event gate shut while this message is pending:
+ * a filter-capability probe, or a request with filters. An unfiltered request
+ * proves that no gated request is pending, since a client sends one at a time.
+ * A message that earns an error counts as gated, to stay on the safe side.
+ */
+export function gatesClient(message: string | ArrayBuffer): boolean {
+  const request = read(message);
+  if ("reply" in request) return !("echo" in request);
+  if (request.type === "list") return request.subscription_filters;
+  return (
+    isRecord(request.subscription) &&
+    FILTER_FIELDS.some((field) => field in (request.subscription as object))
+  );
+}
+
 function incompleteGithub(
   id: string,
   subscription: Subscription,

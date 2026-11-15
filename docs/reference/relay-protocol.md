@@ -7,7 +7,7 @@ generated:
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-15T00:35:36Z"
+    at: "2026-11-15T01:07:50Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -122,7 +122,13 @@ The notice is an event from the `awrel` provider with a fresh UUID as its `deliv
 {"type":"event","provider":"awrel","event":"notice","delivery":"UUID","payload":{"code":"subscription_removed","reason":"rate_cap","message":"TEXT","subscription":{...},"limit":{"events":100,"minutes":5}}}
 ```
 
-The `reason` field reads `rate_cap` for the cap, and `unfiltered` for a stored subscription that the earlier refusal removed. To get the events again, subscribe with narrower filters. The relay queues the notice for a removed stored subscription in the socket's attachment, up to 3 per connection, and sends it 5 seconds later. A client ignores events while a filter request is pending, and the relay can't see that gate, so the client would drop a notice that arrived beside a reply.
+The `reason` field reads `rate_cap` for the cap, and `unfiltered` for a stored subscription that the earlier refusal removed. To get the events again, subscribe with narrower filters. Notices for removed stored subscriptions follow these rules:
+
+- Durable Object storage holds them, up to 10 per connection. The relay drops any beyond that.
+- Delivery waits for the client's event gate, which the relay can't see. A client ignores events while a filter request is pending.
+- Queued notices go out just before the relay's reply to the client's next message that proves the gate open. Those messages are a `list` without `subscription_filters`, an unfiltered `subscribe` or `unsubscribe`, and an `echo`.
+- A client that sends none of those gets the notices once it does.
+- Closing the socket, or waking without it, discards them.
 
 ### Errors
 

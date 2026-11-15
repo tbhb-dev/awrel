@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  gatesClient,
   handle,
   limit,
   type Subscription,
@@ -939,5 +940,54 @@ describe("unbounded checks", () => {
       reply: { type: "subscriptions", subscriptions: [] },
       next: [],
     });
+  });
+});
+
+describe("gatesClient", () => {
+  const sub = (extra: string) =>
+    `"subscription":{"provider":"github","event":"push","repository":"o/n"${extra}}`;
+
+  it.each([
+    [
+      "a capability probe",
+      '{"type":"list","id":"a","subscription_filters":true}',
+    ],
+    [
+      "a subscribe with a name",
+      `{"type":"subscribe","id":"a",${sub(',"name":"x"')}}`,
+    ],
+    [
+      "a subscribe with an action",
+      `{"type":"subscribe","id":"a",${sub(',"action":["x"]')}}`,
+    ],
+    [
+      "an unsubscribe with a conclusion",
+      `{"type":"unsubscribe","id":"a",${sub(',"conclusion":["x"]')}}`,
+    ],
+    [
+      "a subscribe with a workflow path",
+      `{"type":"subscribe","id":"a",${sub(',"workflow_path":"p"')}}`,
+    ],
+    ["a malformed message", "not json"],
+  ])("holds the gate for %s", (_name, message) => {
+    expect(gatesClient(message)).toBe(true);
+  });
+
+  it.each([
+    ["a plain list", '{"type":"list","id":"a"}'],
+    ["a subscribe without filters", `{"type":"subscribe","id":"a",${sub("")}}`],
+    [
+      "an unsubscribe without filters",
+      `{"type":"unsubscribe","id":"a",${sub("")}}`,
+    ],
+    ["an echo", '{"type":"echo","id":"a","nonce":"n"}'],
+  ])("leaves the gate open for %s", (_name, message) => {
+    expect(gatesClient(message)).toBe(false);
+  });
+
+  it("treats a subscribe that holds no object as unfiltered", () => {
+    expect(gatesClient('{"type":"subscribe","id":"a","subscription":1}')).toBe(
+      false,
+    );
   });
 });

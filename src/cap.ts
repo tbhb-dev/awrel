@@ -148,17 +148,46 @@ export function delivered(
   );
 }
 
-/** Drops the counts of a connection that closed. */
-export function forget(kv: SyncKvStorage, id: string | undefined): void {
-  kv.delete(slot(id));
+/** The most removal notices kept for one connection; later ones are dropped. */
+export const MAX_PENDING = 10;
+
+// Removal notices (event frames) wait here, outside the socket attachment,
+// until the client's next message shows that its event gate is open.
+function queueSlot(id: string | undefined): string {
+  return `n:${String(id)}`;
 }
 
-/** Drops the counts of every connection that is not in `live`. */
+/** Adds removal notices to a connection's queue, dropping any past the limit. */
+export function enqueue(
+  kv: SyncKvStorage,
+  id: string,
+  frames: readonly string[],
+): void {
+  const queued = kv.get<string[]>(queueSlot(id)) ?? [];
+  kv.put(queueSlot(id), [...queued, ...frames].slice(0, MAX_PENDING));
+}
+
+/** Takes a connection's queued removal notices, leaving its queue empty. */
+export function dequeue(kv: SyncKvStorage, id: string | undefined): string[] {
+  const queued = kv.get<string[]>(queueSlot(id)) ?? [];
+  kv.delete(queueSlot(id));
+  return queued;
+}
+
+/** Drops the counts and queued notices of a connection that closed. */
+export function forget(kv: SyncKvStorage, id: string | undefined): void {
+  kv.delete(slot(id));
+  kv.delete(queueSlot(id));
+}
+
+/** Drops the counts and queued notices of every connection not in `live`. */
 export function forgetOthers(
   kv: SyncKvStorage,
   live: ReadonlySet<string>,
 ): void {
-  for (const [name] of [...kv.list({ prefix: "c:" })]) {
-    if (!live.has(name.slice(2))) kv.delete(name);
+  for (const prefix of ["c:", "n:"]) {
+    for (const [name] of [...kv.list({ prefix })]) {
+      if (!live.has(name.slice(2))) kv.delete(name);
+    }
   }
 }

@@ -7,12 +7,15 @@ import {
   CAP_MINUTES,
   charge,
   delivered,
+  dequeue,
+  enqueue,
   forget,
   forgetOthers,
   refund,
   retain,
 } from "./cap.ts";
 import {
+  gatesClient,
   handle,
   limit,
   type Subscription,
@@ -41,20 +44,18 @@ function eventFrame(
  */
 export interface Attachment {
   readonly subscriptions: readonly Subscription[];
-  /** Names the connection's delivery counts; set on its first matching event. */
+  /** Names the connection's delivery counts and queued notices; set on its first matching event or removal. */
   readonly id?: string;
-  /**
-   * Removal notices (as event frames) waiting for the client's event gate to
-   * open. A client ignores events while one of its filter requests is
-   * pending, so a notice sent beside a reply would be lost.
-   */
-  readonly pending?: readonly string[];
 }
 
-/** How long a removal notice waits before it is sent, in milliseconds. */
-const NOTICE_DELAY_MS = 5000;
-/** The most notices kept for one connection; later ones are dropped. */
-const MAX_PENDING = 3;
+// The event still goes out when this fails; the cap trips again on the next.
+function store(socket: WebSocket, attachment: Attachment): void {
+  try {
+    socket.serializeAttachment(attachment);
+  } catch (error) {
+    console.error("connection state could not be stored", error);
+  }
+}
 
 function thisMinute(): number {
   return Math.floor(Date.now() / 60_000);
@@ -177,8 +178,9 @@ export class Relay extends DurableObject {
   }
 
   // Removes the stored subscriptions that a check refuses and queues a
-  // notice for each in the attachment, for `alarm` to send once the client's
-  // gate is open. Returns the attachment as it stands afterwards.
+  // notice for each in storage, for `deliverNotices` to send once a client
+  // message shows that its event gate is open. Returns the attachment as it
+  // stands afterwards. A storage failure is logged and never stops the caller.
   private screen(
     socket: WebSocket,
     attachment: Attachment | null,
@@ -189,38 +191,42 @@ export class Relay extends DurableObject {
       return message === null ? [] : [{ subscription, message }];
     });
     if (refusals.length === 0) return attachment;
+    const id = attachment.id ?? crypto.randomUUID();
     const next: Attachment = {
-      ...attachment,
       subscriptions: attachment.subscriptions.filter(
         (subscription) => unboundedCheck(subscription) === null,
       ),
-      pending: [
-        ...(attachment.pending ?? []),
-        ...refusals.map(({ subscription, message }) =>
+      id,
+    };
+    try {
+      socket.serializeAttachment(next);
+    } catch (error) {
+      console.error("removed subscriptions could not be stored", error);
+      return attachment;
+    }
+    try {
+      enqueue(
+        this.ctx.storage.kv,
+        id,
+        refusals.map(({ subscription, message }) =>
           noticeFrame(subscription, "unfiltered", message),
         ),
-      ].slice(0, MAX_PENDING),
-    };
-    socket.serializeAttachment(next);
-    this.ctx.storage
-      .setAlarm(Date.now() + NOTICE_DELAY_MS)
-      .catch((error: unknown) => {
-        console.error("notice alarm could not be set", error);
-      });
+      );
+    } catch (error) {
+      console.error("removal notices could not be queued", error);
+    }
     return next;
   }
 
-  /** Sends the queued removal notices to the sockets that wait for them. */
-  override alarm(): void {
-    for (const socket of this.ctx.getWebSockets()) {
-      const attachment = socket.deserializeAttachment() as Attachment | null;
-      if (attachment?.pending === undefined) continue;
-      try {
-        for (const frame of attachment.pending) socket.send(frame);
-      } catch {
-        // The socket is closing; it has no subscriptions left to lose.
+  // Sends the queued removal notices. Called only for a message that proves
+  // the client's event gate is open (see `gatesClient`), before its reply.
+  private deliverNotices(ws: WebSocket, attachment: Attachment): void {
+    try {
+      for (const frame of dequeue(this.ctx.storage.kv, attachment.id)) {
+        ws.send(frame);
       }
-      socket.serializeAttachment({ ...attachment, pending: undefined });
+    } catch (error) {
+      console.error("removal notices could not be sent", error);
     }
   }
 
@@ -258,6 +264,7 @@ export class Relay extends DurableObject {
       ws,
       ws.deserializeAttachment() as Attachment,
     ) as Attachment;
+    if (!gatesClient(message)) this.deliverNotices(ws, attachment);
     const outcome = handle(attachment.subscriptions, message);
     if (outcome.next !== null) {
       try {
@@ -343,13 +350,12 @@ export class Relay extends DurableObject {
         screened.subscriptions,
       );
       if (tripped.length > 0 || screened.id === undefined) {
-        socket.serializeAttachment({
-          ...screened,
+        store(socket, {
           subscriptions: screened.subscriptions.filter(
             (s) => !tripped.includes(s),
           ),
           id,
-        } satisfies Attachment);
+        });
       }
       announceCap(socket, tripped);
       if (within.length === 0) continue;
