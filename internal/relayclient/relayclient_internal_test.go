@@ -28,9 +28,7 @@ import (
 const (
 	providerGitHub          = "github"
 	pushEvent               = "push"
-	awrelProvider           = "awrel"
 	echoEvent               = "echo"
-	noticeEvent             = "notice"
 	filterPendingReason     = "filter request pending"
 	eventKey                = "event"
 	relayIncompatibleReason = "relay incompatible"
@@ -2381,6 +2379,10 @@ func TestNoticesPassPendingGates(t *testing.T) {
 		{Provider: awrelProvider, Event: echoEvent, Delivery: "d2", Repository: nil, Payload: json.RawMessage(`{}`)},
 	}
 
+	events := make([]protocol.Event, 0, len(others)+1)
+	events = append(events, others...)
+	events = append(events, notice)
+
 	for _, reason := range []string{filterPendingReason, replayPendingReason} {
 		var got []protocol.Event
 
@@ -2389,7 +2391,7 @@ func TestNoticesPassPendingGates(t *testing.T) {
 		client := New(opts)
 		setEventGate(client, reason)
 
-		for _, event := range append(others, notice) {
+		for _, event := range events {
 			if !client.handle(t.Context(), event) {
 				t.Fatal("event ended reader")
 			}
