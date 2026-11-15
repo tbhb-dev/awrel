@@ -107,9 +107,28 @@ jobs:
       - name: Test
         env:
           FILTERS: ${{ matrix.filters }}
+          EVENT_NAME: ${{ github.event_name }}
         # FILTERS is either empty or a list of flags, split into words.
         run: |
           read -ra filters <<<"${FILTERS}"
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            # Merge filters: Bazel uses the last flag; Go mutation reports are build actions.
+            build_tags=-mutation
+            test_tags=-mutation
+            for i in "${!filters[@]}"; do
+              case "${filters[i]}" in
+                --build_tag_filters=*)
+                  build_tags="${filters[i]#*=},${build_tags}"
+                  unset 'filters[i]'
+                  ;;
+                --test_tag_filters=*)
+                  test_tags="${filters[i]#*=},${test_tags}"
+                  unset 'filters[i]'
+                  ;;
+              esac
+            done
+            filters+=("--build_tag_filters=${build_tags}" "--test_tag_filters=${test_tags}")
+          fi
           bazelisk test --config=ci "${filters[@]}" //...
 
       # Keep passing timings visible too; failed sessions also print stacks.

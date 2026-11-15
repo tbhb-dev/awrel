@@ -198,6 +198,7 @@ gomutants_test(
     go_mod = "go.mod",
     go_sum = "go.sum",
     proxy = "@go_mod_proxy//:proxy",
+    tags = ["mutation"],
     tests = [
         "//cmd/awrel:awrel_test",
         "//internal/buildmeta:buildmeta_test",
@@ -224,6 +225,7 @@ gomutants_test(
     go_mod = "go.mod",
     go_sum = "go.sum",
     proxy = "@go_mod_proxy//:proxy",
+    tags = ["mutation"],
     target_compatible_with = select({
         "@platforms//os:windows": ["@platforms//:incompatible"],
         "//conditions:default": [],
@@ -494,6 +496,7 @@ workers_stryker_test(
     node_modules = [":node_modules"],
     tags = [
         "cpu:2",
+        "mutation",
         "worker",
     ],
 )
