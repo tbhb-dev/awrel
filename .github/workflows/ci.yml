@@ -8,21 +8,24 @@
 # GitHub API run as their own steps after it. A final `conclusion` job gives
 # branch protection one stable required check.
 #
-# On main, the deploy workflow runs these same jobs before it deploys,
-# rather than reacting to this workflow's result.
+# Pull requests run Linux (x86_64 and arm64) and Windows. Pushes to main,
+# nightly runs and reusable calls also run macOS (arm64). On main, the
+# deploy workflow calls these jobs before it deploys.
 name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '23 7 * * *'
   workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -41,17 +44,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-26.04, ubuntu-26.04-arm, macos-26, windows-2025]
+        os: >-
+          ${{ fromJSON(github.event_name == 'pull_request' &&
+          '["ubuntu-26.04","ubuntu-26.04-arm","windows-2025"]' ||
+          '["ubuntu-26.04","ubuntu-26.04-arm","macos-26","windows-2025"]') }}
         include:
+          # Defaults merge into existing legs without adding an OS.
+          - release: release
+            filters: --build_tag_filters=-worker --test_tag_filters=-worker
           - os: ubuntu-26.04
             release: release
             filters: ""
           - os: ubuntu-26.04-arm
             release: release
             filters: ""
-          - os: macos-26
-            release: release
-            filters: --build_tag_filters=-worker --test_tag_filters=-worker
           # Bazel runs the workspace status command without a shell on
           # Windows, so the release config there uses the batch script.
           - os: windows-2025
