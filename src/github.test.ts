@@ -4,7 +4,7 @@
 import { env, exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.ts";
-import { receiveGitHub } from "./github.ts";
+import { MAX_BODY_BYTES, receiveGitHub } from "./github.ts";
 import {
   connect,
   digest,
@@ -160,6 +160,117 @@ describe("request", () => {
   it("checks the signature before the rest of the request", async () => {
     const response = await post({ signature: null, event: null, body: "{" });
     expect(response.status).toBe(401);
+  });
+});
+
+describe("body size", () => {
+  it("refuses a body over the cap before checking its signature", async () => {
+    const response = await post({
+      body: "x".repeat(MAX_BODY_BYTES + 1),
+      signature: null,
+    });
+    expect(response.status).toBe(413);
+  });
+
+  it("refuses a declared length over the cap without reading", async () => {
+    const response = await receiveGitHub(
+      new Request("https://awrel.example/webhooks/github", {
+        method: "POST",
+        headers: { "Content-Length": String(MAX_BODY_BYTES + 1) },
+      }),
+      env as unknown as Env,
+    );
+    expect(response.status).toBe(413);
+  });
+
+  it("checks the signature with a declared length at the cap and no body", async () => {
+    const response = await receiveGitHub(
+      new Request("https://awrel.example/webhooks/github", {
+        method: "POST",
+        headers: { "Content-Length": String(MAX_BODY_BYTES) },
+      }),
+      env as unknown as Env,
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it("checks the signature of a streamed body at the cap", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_BODY_BYTES));
+        controller.close();
+      },
+    });
+    const response = await receiveGitHub(
+      new Request("https://awrel.example/webhooks/github", {
+        method: "POST",
+        body,
+      }),
+      env as unknown as Env,
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it.each([
+    ["absent", null],
+    ["understated", "1"],
+  ])("cancels an oversize stream with an %s length", async (_name, length) => {
+    let reads = 0;
+    const cancel = vi.fn(() => undefined);
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          controller.enqueue(
+            new Uint8Array(reads++ === 0 ? MAX_BODY_BYTES : 1),
+          );
+        },
+        cancel,
+      },
+      { highWaterMark: 0 },
+    );
+    const headers = new Headers();
+    if (length !== null) headers.set("Content-Length", length);
+    const response = await receiveGitHub(
+      new Request("https://awrel.example/webhooks/github", {
+        method: "POST",
+        body,
+        headers,
+      }),
+      env as unknown as Env,
+    );
+    expect(response.status).toBe(413);
+    expect(await response.text()).toBe("Payload Too Large");
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(reads).toBe(2);
+  });
+
+  it("verifies a signature over multiple body chunks", async () => {
+    const chunks = ['{"repository":', '{"full_name":"Owner/Repo"}}'];
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+        controller.close();
+      },
+    });
+    const response = await receiveGitHub(
+      new Request("https://awrel.example/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": await sign(chunks.join("")),
+          "X-GitHub-Event": "push",
+          "X-GitHub-Delivery": "d-1",
+        },
+      }),
+      env as unknown as Env,
+    );
+    expect(response.status).toBe(202);
+  });
+
+  it("accepts a body under the cap", async () => {
+    expect((await post()).status).toBe(202);
   });
 });
 

@@ -15,11 +15,15 @@ async function matches(expected: string, presented: string): Promise<boolean> {
 }
 
 /**
- * Answers `GET /connect`: checks the WebSocket upgrade, the bearer token and
+ * Answers `GET /connect`: answers 503 when no connect token is set, then checks the WebSocket upgrade, the bearer token and
  * the awrel.v1 subprotocol, all before the relay is touched, then hands the
  * request to the relay, which accepts the socket.
  */
 export async function connect(request: Request, env: Env): Promise<Response> {
+  if (!env.CONNECT_TOKEN) {
+    console.log("connect token is not set");
+    return new Response("Service Unavailable", { status: 503 });
+  }
   if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
     return new Response("Upgrade Required", {
       status: 426,
