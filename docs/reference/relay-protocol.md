@@ -7,7 +7,7 @@ generated:
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-14T22:56:50Z"
+    at: "2026-11-15T00:06:02Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -107,7 +107,14 @@ An older relay answers echo with `{"type":"error","id":"ID","code":"bad_message"
 
 ### Delivery cap
 
-A subscription can match 100 events in any 5 minutes. When the next event would push it over, the relay skips that subscription and removes it from the socket's attachment. It then sends one notice event before any other frame for that event. An event that matches many subscriptions counts once toward each of them, and the socket still gets the event while any match stays within its cap. The relay keeps the counts in the Durable Object's storage, keyed by a connection id in the attachment, so they survive hibernation. It deletes them when the socket closes or fails, and when it wakes without that socket.
+A subscription can match 100 events in any 5 minutes. Counting uses whole minutes: the current minute and the four before it, which spans 4 to 5 minutes.
+
+- When the next event would push a subscription over, the relay skips it and removes it from the socket's attachment. One notice event follows before any other frame for that event.
+- After a cap trip, none of the events that subscription covered arrive until the session subscribes again.
+- An event that matches many subscriptions counts once toward each of them, and the socket still gets the event while any match stays within its cap.
+- A socket that fails to receive an event doesn't count it.
+- Counts live in the Durable Object's storage, keyed by a connection id in the attachment, so they survive hibernation. They cover the connection's current subscriptions only, and go when the socket closes or fails or when the relay wakes without it.
+- If the relay can't store counts, it logs the failure and sends the event uncounted.
 
 The notice is an event from the `awrel` provider with a fresh UUID as its `delivery` and no `repository`:
 
@@ -115,7 +122,7 @@ The notice is an event from the `awrel` provider with a fresh UUID as its `deliv
 {"type":"event","provider":"awrel","event":"notice","delivery":"UUID","payload":{"code":"subscription_removed","reason":"rate_cap","message":"TEXT","subscription":{...},"limit":{"events":100,"minutes":5}}}
 ```
 
-The `reason` field reads `rate_cap` for the cap, and `unfiltered` for a stored subscription that the earlier refusal removed. To get the events again, subscribe with narrower filters.
+The `reason` field reads `rate_cap` for the cap, and `unfiltered` for a stored subscription that the earlier refusal removed. To get the events again, subscribe with narrower filters. A removal that a client's own message caused gets its notice after the reply to that message, since a client ignores events while it waits for a reply.
 
 ### Errors
 

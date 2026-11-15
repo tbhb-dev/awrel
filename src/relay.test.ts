@@ -3,10 +3,10 @@
 
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
+import { delivered } from "./cap.ts";
 import { limit, type Subscription, unboundedCheck } from "./protocol.ts";
 import { type Attachment, connectionId, type RelayEvent } from "./relay.ts";
 import {
-  type Client,
   connect,
   dial,
   disconnectAll,
@@ -150,6 +150,9 @@ function events(received: string[]): unknown[] {
 
 const subscribe = (id: string, subscription: Subscription): string =>
   JSON.stringify({ type: "subscribe", id, subscription });
+
+const unsubscribe = (id: string, subscription: Subscription): string =>
+  JSON.stringify({ type: "unsubscribe", id, subscription });
 
 const list = '{"type":"list","id":"l"}';
 
@@ -809,13 +812,6 @@ describe("check subscriptions and the delivery cap", () => {
   const frames = (client: { received: string[] }) =>
     client.received.map((m) => JSON.parse(m) as Frame);
 
-  // The reply to a request after any notices that came before it.
-  const ask = async (client: Client, frame: string) => {
-    client.socket.send(frame);
-    await settle();
-    return JSON.parse(client.received.at(-1) ?? "null") as unknown;
-  };
-
   // Replaces what the relay stored for the only live socket.
   const plant = (attachment: Attachment) =>
     runInDurableObject(relay(), (_instance, state) => {
@@ -840,14 +836,16 @@ describe("check subscriptions and the delivery cap", () => {
     expect(await exchange(client, list)).toStrictEqual(subscriptions("l", []));
   });
 
-  it("removes stored unnamed checks at the next message, with a notice each", async () => {
+  it("removes stored unnamed checks at the next message, with a notice each after the reply", async () => {
     const client = await dial();
     await plant({ subscriptions: [UNNAMED, PUSH, SUITE] });
-    expect(await ask(client, list)).toStrictEqual(subscriptions("l", [PUSH]));
-    const [first, second] = frames(client);
+    client.socket.send(list);
+    await settle();
+    const [first, second, third] = frames(client);
+    expect(first).toStrictEqual(subscriptions("l", [PUSH]));
     for (const [notice, subscription] of [
-      [first, UNNAMED],
-      [second, SUITE],
+      [second, UNNAMED],
+      [third, SUITE],
     ] as const) {
       expect(notice).toMatchObject({
         type: "event",
@@ -864,6 +862,38 @@ describe("check subscriptions and the delivery cap", () => {
       expect(notice?.delivery).toMatch(/^[0-9a-f-]{36}$/);
     }
     expect(client.received).toHaveLength(3);
+  });
+
+  it("sends the notice after the reply to a subscribe that fits", async () => {
+    const client = await dial();
+    await plant({ subscriptions: [UNNAMED] });
+    client.socket.send(subscribe("s", PUSH));
+    await settle();
+    expect(frames(client).map((f) => f.type)).toStrictEqual([
+      "subscriptions",
+      "event",
+    ]);
+  });
+
+  it("sends the notice after the limit reply too", async () => {
+    const sent: string[] = [];
+    let writes = 0;
+    const socket = {
+      deserializeAttachment: () => ({ subscriptions: [SUITE] }),
+      serializeAttachment: () => {
+        writes += 1;
+        if (writes > 1) throw new Error("too large");
+      },
+      send: (message: string) => sent.push(message),
+    } as unknown as WebSocket;
+    await runInDurableObject(relay(), (instance) => {
+      instance.webSocketMessage(socket, subscribe("s", PUSH));
+    });
+    expect(sent.map((m) => (JSON.parse(m) as Frame).type)).toStrictEqual([
+      "error",
+      "event",
+    ]);
+    expect(sent[0]).toBe(JSON.stringify(limit("s")));
   });
 
   it("removes stored unnamed checks when an event arrives", async () => {
@@ -1097,5 +1127,146 @@ describe("check subscriptions and the delivery cap", () => {
   it("names a connection by its id, and one that never subscribed by none", () => {
     expect(connectionId({ subscriptions: [], id: "x" })).toBe("x");
     expect(connectionId(null)).toBe("undefined");
+  });
+
+  it("drops the counts of an unsubscribed subscription", async () => {
+    const client = await dial();
+    const record = () =>
+      runInDurableObject(relay(), async (_instance, state) => {
+        const [{ id }] = (await attachments()) as [Attachment];
+        return state.storage.kv.get(`c:${String(id)}`) as Record<
+          string,
+          unknown
+        >;
+      });
+    await exchange(client, subscribe("s", PUSH));
+    await relay().publish(EVENT);
+    expect(Object.keys(await record())).toHaveLength(1);
+    await exchange(client, subscribe("t", { ...PUSH, event: "issues" }));
+    await exchange(client, unsubscribe("u", PUSH));
+    expect(await record()).toStrictEqual({});
+  });
+
+  it("keeps the record to the live subscriptions as the list changes", async () => {
+    const client = await dial();
+    const filters = Array.from({ length: 6 }, (_, i) => ({
+      ...PUSH,
+      action: [`a${String(i)}`],
+    }));
+    for (const filter of filters) {
+      await exchange(client, subscribe(filter.action[0] ?? "", filter));
+      await relay().publish({
+        ...EVENT,
+        payload: { action: filter.action[0] },
+      });
+      await runInDurableObject(relay(), (_instance, state) => {
+        const sockets = state.getWebSockets();
+        sockets[0]?.serializeAttachment({
+          subscriptions: [filter],
+          id: (sockets[0].deserializeAttachment() as Attachment).id ?? "",
+        });
+      });
+    }
+    const sizes = await runInDurableObject(relay(), (_instance, state) =>
+      [...state.storage.kv.list({ prefix: "c:" })].map(
+        ([, value]) => Object.keys(value as object).length,
+      ),
+    );
+    expect(sizes).toStrictEqual([1]);
+  });
+
+  it("delivers the event when the counts cannot be stored, and logs it", async () => {
+    const client = await dial();
+    await exchange(client, subscribe("s", PUSH));
+    const logged: unknown[][] = [];
+    const reached = await runInDurableObject(relay(), (instance, state) => {
+      const { kv } = state.storage;
+      const put = kv.put.bind(kv);
+      const log = console.error;
+      console.error = (...args: unknown[]) => logged.push(args);
+      kv.put = () => {
+        throw new Error("value too large");
+      };
+      try {
+        return instance.publish(EVENT);
+      } finally {
+        kv.put = put;
+        console.error = log;
+      }
+    });
+    await settle();
+    expect(reached).toBe(1);
+    expect(
+      frames(client)
+        .filter((f) => f.type === "event")
+        .map((f) => f.event),
+    ).toStrictEqual(["push"]);
+    expect(await attachments()).toMatchObject([{ subscriptions: [PUSH] }]);
+    expect(logged[0]?.[0]).toBe("delivery counts could not be stored");
+  });
+
+  it("takes back the count of an event a socket never got", async () => {
+    const minute = Math.floor(Date.now() / 60_000);
+    const counts = await runInDurableObject(relay(), (instance, state) => {
+      const socket = {
+        deserializeAttachment: () => ({ subscriptions: [PUSH], id: "m" }),
+        serializeAttachment: () => undefined,
+        send: () => {
+          throw new Error("closing");
+        },
+      } as unknown as WebSocket;
+      const original = state.getWebSockets.bind(state);
+      state.getWebSockets = () => [socket];
+      try {
+        expect(instance.publish(EVENT)).toBe(0);
+      } finally {
+        state.getWebSockets = original;
+      }
+      return delivered(state.storage.kv, "m", [PUSH], minute);
+    });
+    expect(counts).toStrictEqual([0]);
+  });
+
+  it("logs a failed refund and goes on", async () => {
+    const logged: unknown[][] = [];
+    await runInDurableObject(relay(), (instance, state) => {
+      const { kv } = state.storage;
+      const put = kv.put.bind(kv);
+      let calls = 0;
+      kv.put = (key: string, value: unknown) => {
+        calls += 1;
+        if (calls > 1) throw new Error("value too large");
+        put(key, value);
+      };
+      const log = console.error;
+      console.error = (...args: unknown[]) => logged.push(args);
+      const socket = {
+        deserializeAttachment: () => ({ subscriptions: [PUSH], id: "m" }),
+        serializeAttachment: () => undefined,
+        send: () => {
+          throw new Error("closing");
+        },
+      } as unknown as WebSocket;
+      const original = state.getWebSockets.bind(state);
+      state.getWebSockets = () => [socket];
+      try {
+        expect(instance.publish(EVENT)).toBe(0);
+      } finally {
+        state.getWebSockets = original;
+        kv.put = put;
+        console.error = log;
+      }
+    });
+    expect(logged[0]?.[0]).toBe("delivery counts could not be corrected");
+  });
+
+  it("stores no counts for a connection that never matched an event", async () => {
+    const client = await dial();
+    await exchange(client, subscribe("s", PUSH));
+    await exchange(client, unsubscribe("u", PUSH));
+    const keys = await runInDurableObject(relay(), (_instance, state) =>
+      [...state.storage.kv.list({ prefix: "c:" })].map(([key]) => key),
+    );
+    expect(keys).not.toContain("c:undefined");
   });
 });

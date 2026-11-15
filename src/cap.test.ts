@@ -9,6 +9,8 @@ import {
   delivered,
   forget,
   forgetOthers,
+  refund,
+  retain,
 } from "./cap.ts";
 import type { Subscription } from "./protocol.ts";
 
@@ -50,20 +52,20 @@ describe("charge", () => {
 
   it("counts a delivery for each subscription and keeps them apart", () => {
     const kv = memory();
-    expect(charge(kv, "c", [A, B], 10)).toStrictEqual({
+    expect(charge(kv, "c", [A, B], 10, [A, B])).toStrictEqual({
       within: [A, B],
       tripped: [],
     });
-    charge(kv, "c", [A], 10);
+    charge(kv, "c", [A], 10, [A, B]);
     expect(delivered(kv, "c", [A, B], 10)).toStrictEqual([2, 1]);
   });
 
   it("allows the 100th event in the window and trips on the 101st", () => {
     const kv = memory();
     for (let i = 0; i < CAP_EVENTS; i += 1) {
-      expect(charge(kv, "c", [A], 10).tripped).toStrictEqual([]);
+      expect(charge(kv, "c", [A], 10, [A]).tripped).toStrictEqual([]);
     }
-    expect(charge(kv, "c", [A], 10)).toStrictEqual({
+    expect(charge(kv, "c", [A], 10, [A])).toStrictEqual({
       within: [],
       tripped: [A],
     });
@@ -73,9 +75,9 @@ describe("charge", () => {
 
   it("trips only the subscription at the cap", () => {
     const kv = memory();
-    for (let i = 0; i < CAP_EVENTS; i += 1) charge(kv, "c", [A], 10);
-    charge(kv, "c", [B], 10);
-    expect(charge(kv, "c", [A, B], 10)).toStrictEqual({
+    for (let i = 0; i < CAP_EVENTS; i += 1) charge(kv, "c", [A], 10, [A]);
+    charge(kv, "c", [B], 10, [A, B]);
+    expect(charge(kv, "c", [A, B], 10, [A, B])).toStrictEqual({
       within: [B],
       tripped: [A],
     });
@@ -83,21 +85,24 @@ describe("charge", () => {
 
   it("counts the current minute and the four before it", () => {
     const kv = memory();
-    for (let i = 0; i < CAP_EVENTS; i += 1) charge(kv, "c", [A], 10);
-    expect(charge(kv, "c", [A], 14).tripped).toStrictEqual([A]);
-    for (let i = 0; i < CAP_EVENTS; i += 1) charge(kv, "d", [A], 10);
-    expect(charge(kv, "d", [A], 15).tripped).toStrictEqual([]);
+    for (let i = 0; i < CAP_EVENTS; i += 1) charge(kv, "c", [A], 10, [A]);
+    expect(charge(kv, "c", [A], 14, [A]).tripped).toStrictEqual([A]);
+    for (let i = 0; i < CAP_EVENTS; i += 1) charge(kv, "d", [A], 10, [A]);
+    expect(charge(kv, "d", [A], 15, [A]).tripped).toStrictEqual([]);
   });
 
   it("keeps each connection's counts apart", () => {
     const kv = memory();
-    for (let i = 0; i < CAP_EVENTS; i += 1) charge(kv, "c", [A], 10);
-    expect(charge(kv, "d", [A], 10).tripped).toStrictEqual([]);
+    for (let i = 0; i < CAP_EVENTS; i += 1) charge(kv, "c", [A], 10, [A]);
+    expect(charge(kv, "d", [A], 10, [A]).tripped).toStrictEqual([]);
   });
 
   it("writes nothing for no subscriptions", () => {
     const kv = memory();
-    expect(charge(kv, "c", [], 10)).toStrictEqual({ within: [], tripped: [] });
+    expect(charge(kv, "c", [], 10, [])).toStrictEqual({
+      within: [],
+      tripped: [],
+    });
     expect(kv.map.size).toBe(0);
   });
 
@@ -113,7 +118,7 @@ describe("charge", () => {
       { ...A, name: "build" },
       { ...A, workflow_path: "ci.yml" },
     ];
-    charge(kv, "c", variants, 10);
+    charge(kv, "c", variants, 10, variants);
     expect(delivered(kv, "c", variants, 10)).toStrictEqual(
       variants.map(() => 1),
     );
@@ -123,8 +128,8 @@ describe("charge", () => {
 describe("delivered", () => {
   it("counts the last hour and no further back", () => {
     const kv = memory();
-    charge(kv, "c", [A], 100);
-    charge(kv, "c", [A], 130);
+    charge(kv, "c", [A], 100, [A]);
+    charge(kv, "c", [A], 130, [A]);
     expect(delivered(kv, "c", [A], 159)).toStrictEqual([2]);
     expect(delivered(kv, "c", [A], 160)).toStrictEqual([1]);
     expect(delivered(kv, "c", [A], 190)).toStrictEqual([0]);
@@ -132,8 +137,8 @@ describe("delivered", () => {
 
   it("drops the hour's old minutes when it stores new ones", () => {
     const kv = memory();
-    charge(kv, "c", [A], 100);
-    charge(kv, "c", [B], 200);
+    charge(kv, "c", [A], 100, [A]);
+    charge(kv, "c", [B], 200, [B]);
     expect(kv.get("c:c")).toStrictEqual({
       [JSON.stringify([
         "github",
@@ -157,23 +162,23 @@ describe("delivered", () => {
 describe("forget", () => {
   it("drops one connection's counts", () => {
     const kv = memory();
-    charge(kv, "c", [A], 10);
-    charge(kv, "d", [A], 10);
+    charge(kv, "c", [A], 10, [A]);
+    charge(kv, "d", [A], 10, [A]);
     forget(kv, "c");
     expect([...kv.map.keys()]).toStrictEqual(["c:d"]);
   });
 
   it("does nothing for a connection with no id", () => {
     const kv = memory();
-    charge(kv, "c", [A], 10);
+    charge(kv, "c", [A], 10, [A]);
     forget(kv, undefined);
     expect([...kv.map.keys()]).toStrictEqual(["c:c"]);
   });
 
   it("drops the counts of connections that are not live", () => {
     const kv = memory();
-    charge(kv, "live", [A], 10);
-    charge(kv, "gone", [A], 10);
+    charge(kv, "live", [A], 10, [A]);
+    charge(kv, "gone", [A], 10, [A]);
     kv.put("other", 1);
     forgetOthers(kv, new Set(["live"]));
     expect([...kv.map.keys()].sort()).toStrictEqual(["c:live", "other"]);
@@ -183,16 +188,16 @@ describe("forget", () => {
 describe("the hour boundary", () => {
   it("drops a minute exactly an hour old and keeps the one after it", () => {
     const kv = memory();
-    charge(kv, "c", [A], 100);
-    charge(kv, "c", [A], 101);
+    charge(kv, "c", [A], 100, [A]);
+    charge(kv, "c", [A], 101, [A]);
     expect(delivered(kv, "c", [A], 160)).toStrictEqual([1]);
     expect(delivered(kv, "c", [A], 161)).toStrictEqual([0]);
   });
 
   it("drops the old minute from the stored counters on the next charge", () => {
     const kv = memory();
-    charge(kv, "c", [A], 100);
-    charge(kv, "c", [A], 160);
+    charge(kv, "c", [A], 100, [A]);
+    charge(kv, "c", [A], 160, [A]);
     expect(kv.map.get("c:c")).toStrictEqual({
       [JSON.stringify(["github", "push", "o/a", null, null, null, null])]: {
         "160": 1,
@@ -206,5 +211,54 @@ describe("the hour boundary", () => {
     expect(() => {
       forget(kv, undefined);
     }).not.toThrow();
+  });
+});
+
+describe("old minutes", () => {
+  it("leaves no entry for a subscription whose minutes all aged out", () => {
+    const kv = memory();
+    charge(kv, "c", [A], 100, [A, B]);
+    charge(kv, "c", [B], 200, [A, B]);
+    expect(Object.keys(kv.map.get("c:c") as object)).toHaveLength(1);
+  });
+});
+
+describe("refund", () => {
+  it("takes back one delivery of this minute", () => {
+    const kv = memory();
+    charge(kv, "c", [A, B], 10, [A, B]);
+    charge(kv, "c", [A], 10, [A, B]);
+    refund(kv, "c", [A], 10);
+    expect(delivered(kv, "c", [A, B], 10)).toStrictEqual([1, 1]);
+  });
+
+  it("leaves a subscription that was never counted alone", () => {
+    const kv = memory();
+    charge(kv, "c", [A], 10, [A, B]);
+    refund(kv, "c", [B], 10);
+    expect(delivered(kv, "c", [A, B], 10)).toStrictEqual([1, 0]);
+  });
+});
+
+describe("keeping the record to live subscriptions", () => {
+  it("charge drops the counts of subscriptions that left the list", () => {
+    const kv = memory();
+    charge(kv, "c", [A], 10, [A]);
+    charge(kv, "c", [B], 10, [B]);
+    expect(delivered(kv, "c", [A, B], 10)).toStrictEqual([0, 1]);
+  });
+
+  it("retain drops them without a charge", () => {
+    const kv = memory();
+    charge(kv, "c", [A, B], 10, [A, B]);
+    retain(kv, "c", [B], 10);
+    expect(delivered(kv, "c", [A, B], 10)).toStrictEqual([0, 1]);
+  });
+
+  it("retain with an empty list leaves an empty record", () => {
+    const kv = memory();
+    charge(kv, "c", [A], 10, [A]);
+    retain(kv, "c", [], 10);
+    expect(kv.map.get("c:c")).toStrictEqual({});
   });
 });

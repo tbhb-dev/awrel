@@ -9,7 +9,7 @@ export const CAP_EVENTS = 100;
 /** The window, in minutes, that the cap counts over. */
 export const CAP_MINUTES = 5;
 
-// Delivery counts reach back one hour, the span that list_subscriptions shows.
+// Delivery counts reach back one hour, the span of `delivered_last_hour`.
 const HOUR_MINUTES = 60;
 
 // Per connection: subscription key -> minute number -> deliveries that minute.
@@ -59,16 +59,34 @@ function total(
   );
 }
 
+// The counters of the subscriptions in `live` only, so the stored record
+// stays within one entry per live subscription.
+function keep(
+  counters: Counters,
+  live: readonly Subscription[],
+  dropped: ReadonlySet<string> = new Set(),
+): Counters {
+  const names = new Set(live.map(key));
+  return Object.fromEntries(
+    Object.entries(counters).filter(
+      ([name]) => names.has(name) && !dropped.has(name),
+    ),
+  );
+}
+
 /**
- * Counts one delivery for each of `subscriptions`, all matched by one event.
- * A subscription already at the cap is not counted: it is returned in
- * `tripped` and its counts are dropped, for the caller to remove it.
+ * Counts one delivery for each of `subscriptions`, all matched by one event
+ * and all among `live`, the connection's subscriptions. A subscription
+ * already at the cap is not counted: it is returned in `tripped` and its
+ * counts are dropped, for the caller to remove it. Counts of subscriptions
+ * that are no longer in `live` go too.
  */
 export function charge(
   kv: SyncKvStorage,
   id: string,
   subscriptions: readonly Subscription[],
   minute: number,
+  live: readonly Subscription[],
 ): { within: Subscription[]; tripped: Subscription[] } {
   const within: Subscription[] = [];
   const tripped: Subscription[] = [];
@@ -87,13 +105,34 @@ export function charge(
       within.push(subscription);
     }
   }
-  kv.put(
-    slot(id),
-    Object.fromEntries(
-      Object.entries(counters).filter(([name]) => !dropped.has(name)),
-    ),
-  );
+  kv.put(slot(id), keep(counters, live, dropped));
   return { within, tripped };
+}
+
+/** Takes back one delivery that `charge` counted but the socket never got. */
+export function refund(
+  kv: SyncKvStorage,
+  id: string,
+  subscriptions: readonly Subscription[],
+  minute: number,
+): void {
+  const counters = load(kv, id, minute);
+  const bucket = String(minute);
+  for (const subscription of subscriptions) {
+    const buckets = counters[key(subscription)];
+    if (buckets?.[bucket] !== undefined) buckets[bucket] -= 1;
+  }
+  kv.put(slot(id), counters);
+}
+
+/** Drops the counts of every subscription that is not in `live`. */
+export function retain(
+  kv: SyncKvStorage,
+  id: string,
+  live: readonly Subscription[],
+  minute: number,
+): void {
+  kv.put(slot(id), keep(load(kv, id, minute), live));
 }
 
 /** The deliveries in the last hour of each subscription, in order. */

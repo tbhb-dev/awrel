@@ -9,6 +9,8 @@ import {
   delivered,
   forget,
   forgetOthers,
+  refund,
+  retain,
 } from "./cap.ts";
 import {
   handle,
@@ -143,10 +145,13 @@ export class Relay extends DurableObject {
   }
 
   // Removes the stored subscriptions that a check refuses, with a notice for
-  // each, and returns the attachment as it stands afterwards.
+  // each, and returns the attachment as it stands afterwards. With `later`,
+  // the notices go into it for the caller to send, so that a reply can come
+  // first: a client that waits for a reply ignores events until then.
   private screen(
     socket: WebSocket,
     attachment: Attachment | null,
+    later?: Array<() => void>,
   ): Attachment | null {
     if (attachment === null) return null;
     const refusals = attachment.subscriptions.flatMap((subscription) => {
@@ -162,7 +167,11 @@ export class Relay extends DurableObject {
     };
     socket.serializeAttachment(next);
     for (const { subscription, message } of refusals) {
-      notice(socket, subscription, "unfiltered", message);
+      const send = () => {
+        notice(socket, subscription, "unfiltered", message);
+      };
+      if (later === undefined) send();
+      else later.push(send);
     }
     return next;
   }
@@ -197,9 +206,11 @@ export class Relay extends DurableObject {
     ws: WebSocket,
     message: string | ArrayBuffer,
   ): void {
+    const notices: Array<() => void> = [];
     const attachment = this.screen(
       ws,
       ws.deserializeAttachment() as Attachment,
+      notices,
     ) as Attachment;
     const outcome = handle(attachment.subscriptions, message);
     if (outcome.next !== null) {
@@ -211,7 +222,11 @@ export class Relay extends DurableObject {
       } catch {
         // The attachment refused the new list: nothing was stored.
         ws.send(JSON.stringify(limit(outcome.reply.id)));
+        for (const send of notices) send();
         return;
+      }
+      if (attachment.id !== undefined) {
+        retain(this.ctx.storage.kv, attachment.id, outcome.next, thisMinute());
       }
     }
     if ("echo" in outcome) {
@@ -243,6 +258,7 @@ export class Relay extends DurableObject {
           : reply,
       ),
     );
+    for (const send of notices) send();
   }
 
   /**
@@ -266,11 +282,11 @@ export class Relay extends DurableObject {
       );
       if (matched.length === 0) continue;
       const id = screened.id ?? crypto.randomUUID();
-      const { within, tripped } = charge(
-        this.ctx.storage.kv,
+      const { within, tripped } = this.count(
         id,
         matched,
         minute,
+        screened.subscriptions,
       );
       if (tripped.length > 0 || screened.id === undefined) {
         socket.serializeAttachment({
@@ -296,8 +312,39 @@ export class Relay extends DurableObject {
         reached += 1;
       } catch {
         // Not reached, so not counted.
+        this.uncount(id, within, minute);
       }
     }
     return reached;
+  }
+
+  // Charges the matched subscriptions. A storage failure must not stop the
+  // event from reaching anyone, so it is logged and the event goes out
+  // uncounted.
+  private count(
+    id: string,
+    matched: readonly Subscription[],
+    minute: number,
+    live: readonly Subscription[],
+  ): { within: Subscription[]; tripped: Subscription[] } {
+    try {
+      return charge(this.ctx.storage.kv, id, matched, minute, live);
+    } catch (error) {
+      console.error("delivery counts could not be stored", error);
+      return { within: [...matched], tripped: [] };
+    }
+  }
+
+  // Takes back the count for an event that a socket never got.
+  private uncount(
+    id: string,
+    within: readonly Subscription[],
+    minute: number,
+  ): void {
+    try {
+      refund(this.ctx.storage.kv, id, within, minute);
+    } catch (error) {
+      console.error("delivery counts could not be corrected", error);
+    }
   }
 }
