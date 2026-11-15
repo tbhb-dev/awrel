@@ -78,7 +78,7 @@ jobs:
       # Hardening (Linux), Bazel and its caches, Windows' Bash, output root
       # and long paths, Linux arm64's Rust, and the retried fetch of //...
       - name: Set up Bazel for CI
-        uses: tbhb-dev/rules/.github/actions/setup-bazel-ci@b6f375a670601f5e505138c7ee86f9e259149c65  # main
+        uses: tbhb-dev/rules/.github/actions/setup-bazel-ci@90c4054c67304574d83c82e0b7a4763ceaa85748  # main
         with:
           disk-cache: >-
             ${{ github.event_name == 'push' && matrix.os != 'windows-2025' && 'false' ||
@@ -90,7 +90,7 @@ jobs:
       # cannot run the action's #!/bin/sh credential helper there.
       - name: Use the remote cache
         if: matrix.os != 'windows-2025'
-        uses: tbhb-dev/bazel-r2-cache/.github/actions/remote-cache@7b7c1c129366cc6ea7d1817f7b2d82df6550162c  # main
+        uses: tbhb-dev/bazel-r2-cache/.github/actions/remote-cache@ced4cd189a557a2b622a7f0906c55a761a037ba2  # main
         with:
           token: >-
             ${{ github.event_name == 'push' && secrets.BAZEL_CACHE_TOKEN ||
@@ -168,7 +168,7 @@ jobs:
     name: repo
     permissions:
       contents: read
-    uses: tbhb-dev/rules/.github/workflows/repo-checks.yml@b6f375a670601f5e505138c7ee86f9e259149c65  # main
+    uses: tbhb-dev/rules/.github/workflows/repo-checks.yml@90c4054c67304574d83c82e0b7a4763ceaa85748  # main
     with:
       timeout-minutes: 10
       pip-audit-target: //tools:pip_audit
@@ -190,6 +190,6 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Fail if any needed job did not succeed
-        uses: tbhb-dev/rules/.github/actions/ci-conclusion@b6f375a670601f5e505138c7ee86f9e259149c65  # main
+        uses: tbhb-dev/rules/.github/actions/ci-conclusion@90c4054c67304574d83c82e0b7a4763ceaa85748  # main
         with:
           needs: ${{ toJSON(needs) }}
