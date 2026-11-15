@@ -126,7 +126,14 @@ export function connectionId(attachment: Attachment | null): string {
   return String(attachment?.id);
 }
 
+/** How long after a filter request the relay holds back queued notices. */
+export const GATE_GRACE_MS = 5000;
+
 export class Relay extends DurableObject {
+  // When the last filter request arrived, on any connection. Not persisted:
+  // a relay that was evicted has been idle for longer than the grace.
+  gatedAt = 0;
+
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
     // The runtime answers a keepalive ping itself, so it never wakes the
@@ -193,6 +200,23 @@ export class Relay extends DurableObject {
     return next;
   }
 
+  // A filter request closes the client's event gate until its reply is
+  // routed, and `list` and `echo` bypass the client's request queue, so they
+  // can arrive while the gate is still shut. The relay sees neither the gate
+  // nor the end of a request. It sends notices only for a message that isn't a
+  // filter request, and only once the last filter request is GATE_GRACE_MS old.
+  private release(
+    ws: WebSocket,
+    attachment: Attachment,
+    message: string | ArrayBuffer,
+  ): void {
+    const now = Date.now();
+    if (gatesClient(message)) this.gatedAt = now;
+    else if (now - this.gatedAt >= GATE_GRACE_MS) {
+      this.deliverNotices(ws, attachment);
+    }
+  }
+
   // Sends the queued removal notices. Called only for a message that proves
   // the client's event gate is open (see `gatesClient`), before its reply.
   private deliverNotices(ws: WebSocket, attachment: Attachment): void {
@@ -240,7 +264,7 @@ export class Relay extends DurableObject {
       ws,
       ws.deserializeAttachment() as Attachment,
     ) as Attachment;
-    if (!gatesClient(message)) this.deliverNotices(ws, attachment);
+    this.release(ws, attachment, message);
     const outcome = handle(attachment.subscriptions, message);
     if (outcome.next !== null) {
       try {

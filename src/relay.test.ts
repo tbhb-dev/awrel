@@ -5,7 +5,12 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { charge, delivered } from "./cap.ts";
 import { limit, type Subscription, unboundedCheck } from "./protocol.ts";
-import { type Attachment, connectionId, type RelayEvent } from "./relay.ts";
+import {
+  type Attachment,
+  connectionId,
+  GATE_GRACE_MS,
+  type RelayEvent,
+} from "./relay.ts";
 import {
   connect,
   dial,
@@ -859,6 +864,11 @@ describe("check subscriptions and the delivery cap", () => {
       },
     });
 
+  const afterGrace = () =>
+    runInDurableObject(relay(), (instance) => {
+      instance.gatedAt = 0;
+    });
+
   const PROBE = '{"type":"list","id":"p","subscription_filters":true}';
   const NAMED = {
     provider: "github",
@@ -879,14 +889,21 @@ describe("check subscriptions and the delivery cap", () => {
       "subscriptions",
     ]);
     expect(await queued(await connection())).toHaveLength(2);
+    // Two lists in the grace after a filter request keep the queue intact.
+    client.socket.send(list);
     client.socket.send(list);
     await settle();
-    const [, , second, third, last] = frames(client);
+    expect(client.received).toHaveLength(4);
+    expect(await queued(await connection())).toHaveLength(2);
+    await afterGrace();
+    client.socket.send(list);
+    await settle();
+    const [, , , , second, third, last] = frames(client);
     expect(second).toStrictEqual(noticeOf(UNNAMED));
     expect(third).toStrictEqual(noticeOf(SUITE));
     expect(last?.type).toBe("subscriptions");
     expect(second?.delivery).toMatch(/^[0-9a-f-]{36}$/);
-    expect(client.received).toHaveLength(5);
+    expect(client.received).toHaveLength(7);
     expect(await queued(await connection())).toStrictEqual([]);
   });
 
@@ -926,6 +943,7 @@ describe("check subscriptions and the delivery cap", () => {
     client.socket.send(PROBE);
     await settle();
     expect(await queued(await connection())).toHaveLength(10);
+    await afterGrace();
     client.socket.send(list);
     await settle();
     expect(frames(client).filter((f) => f.event === "notice")).toHaveLength(10);
@@ -1056,6 +1074,7 @@ describe("check subscriptions and the delivery cap", () => {
       const sent: string[] = [];
       await runInDurableObject(relay(), (instance, state) => {
         const { kv } = state.storage;
+        instance.gatedAt = 0;
         const get = kv.get.bind(kv);
         kv.get = (key: string) => {
           if (key.startsWith("n:")) throw new Error("storage unavailable");
@@ -1085,6 +1104,25 @@ describe("check subscriptions and the delivery cap", () => {
         "subscriptions",
         "subscriptions",
       ]);
+    });
+
+    it("sends notices once the grace has just run out", async () => {
+      const sent: string[] = [];
+      await runInDurableObject(relay(), (instance, state) => {
+        state.storage.kv.put("n:g", ["frame"]);
+        const now = Date.now;
+        Date.now = () => 1_000_000;
+        try {
+          instance.gatedAt = 1_000_000 - GATE_GRACE_MS;
+          instance.webSocketMessage(
+            socketOf({ subscriptions: [], id: "g" }, (m) => sent.push(m)),
+            list,
+          );
+        } finally {
+          Date.now = now;
+        }
+      });
+      expect(sent[0]).toBe("frame");
     });
 
     it("replies without counts when they cannot be read", async () => {

@@ -7,7 +7,7 @@ generated:
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-15T01:46:00Z"
+    at: "2026-11-15T02:12:35Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -127,7 +127,7 @@ The `reason` field reads `rate_cap` for the cap, and `unfiltered` for a stored s
 - A `rate_cap` notice also goes out at once, because a client that only listens never sends a message to release the queue. The copies share one `delivery` id and the Go client doesn't keep delivery ids, so it may show a notice up to three times.
 - Durable Object storage holds the queue, up to 10 per connection. The relay drops any beyond that.
 - A client ignores events while a filter request is pending, and the relay can't see that gate.
-- Before its reply to each of the client's next two messages, the relay sends the queued notices, unless the message is a filter request. Filter requests are a `list` with `subscription_filters` and a `subscribe` or `unsubscribe` with filters.
+- Before its reply to each of the client's next two messages, the relay sends the queued notices, unless the message is a filter request or one arrived in the last 5 seconds. Filter requests are a `list` with `subscription_filters` and a `subscribe` or `unsubscribe` with filters.
 - A client may send `list` or `echo` while a filtered request is pending, and the notice then meets a shut gate. The second send covers that case.
 - A client that sends none of those gets the notices once it does.
 - Closing the socket, or waking without it, discards them.
