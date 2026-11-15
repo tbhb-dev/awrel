@@ -2,7 +2,14 @@
 // Copyright Tony Burns
 
 import { describe, expect, it } from "vitest";
-import { handle, limit, type Subscription, utf8Bytes } from "./protocol.ts";
+import {
+  gatesClient,
+  handle,
+  limit,
+  type Subscription,
+  unboundedCheck,
+  utf8Bytes,
+} from "./protocol.ts";
 
 const GITHUB: Subscription = {
   provider: "github",
@@ -570,8 +577,17 @@ describe("filter event support", () => {
     "workflow_run",
   ];
   it.each(actionEvents)("supports action on %s", (event) => {
-    const subscription = { ...base, event, action: ["future_action"] };
-    expect(subscribe(subscription)).toStrictEqual(accepted(subscription));
+    const subscription = {
+      ...base,
+      event,
+      action: ["future_action"],
+      ...(event === "check_run" ? { name: "build" } : {}),
+    };
+    expect(subscribe(subscription)).toStrictEqual(
+      event === "check_suite"
+        ? bad(unboundedCheck(subscription) ?? "")
+        : accepted(subscription),
+    );
   });
   it.each([
     "push",
@@ -638,11 +654,20 @@ describe("filter event support", () => {
       };
       const supported = support[field as keyof typeof support].includes(event);
       it(`${supported ? "accepts" : "rejects"} ${field} on ${event}`, () => {
-        const subscription = { ...base, event, [field]: input };
+        const subscription = {
+          ...base,
+          event,
+          ...(event === "check_run" && field !== "name"
+            ? { name: "build" }
+            : {}),
+          [field]: input,
+        };
         expect(subscribe(subscription)).toStrictEqual(
-          supported
-            ? accepted(subscription)
-            : bad(`${field} is not supported for github event ${event}`),
+          !supported
+            ? bad(`${field} is not supported for github event ${event}`)
+            : event === "check_suite"
+              ? bad(unboundedCheck(subscription) ?? "")
+              : accepted(subscription),
         );
       });
     }
@@ -857,6 +882,112 @@ describe("echo", () => {
       handle([], JSON.stringify({ ...request, pad: "a".repeat(4097 - size) })),
     ).toStrictEqual(
       error(null, "bad_message", "messages must be at most 4096 bytes"),
+    );
+  });
+});
+
+describe("unbounded checks", () => {
+  const RUN = { provider: "github", event: "check_run", repository: "o/r" };
+  const NO_NAME =
+    'check_run matches every check on every push; add a name filter, such as name "build"';
+  const SUITE =
+    'check_suite matches every check on every push and has no name filter; subscribe to check_run with a name filter, such as name "build", or to workflow_run with a workflow_path filter';
+
+  it("refuses a check_run without a name", () => {
+    expect(unboundedCheck(RUN)).toBe(NO_NAME);
+    expect(handle([], frame("subscribe", RUN))).toStrictEqual(
+      error("i", "bad_subscription", NO_NAME),
+    );
+    expect(
+      handle([], frame("subscribe", { ...RUN, conclusion: ["failure"] })),
+    ).toStrictEqual(error("i", "bad_subscription", NO_NAME));
+  });
+
+  it("refuses a check_suite whatever its filters", () => {
+    expect(unboundedCheck({ ...RUN, event: "check_suite" })).toBe(SUITE);
+    expect(
+      handle(
+        [],
+        frame("subscribe", {
+          ...RUN,
+          event: "check_suite",
+          conclusion: ["failure"],
+        }),
+      ),
+    ).toStrictEqual(error("i", "bad_subscription", SUITE));
+  });
+
+  it("accepts a named check_run", () => {
+    const named = { ...RUN, name: "build" };
+    expect(unboundedCheck(named)).toBeNull();
+    expect(handle([], frame("subscribe", named))).toMatchObject({
+      reply: { type: "subscriptions" },
+      next: [named],
+    });
+  });
+
+  it("leaves other events and providers alone", () => {
+    expect(unboundedCheck({ ...RUN, event: "push" })).toBeNull();
+    expect(unboundedCheck({ ...RUN, event: "workflow_run" })).toBeNull();
+    expect(unboundedCheck({ ...RUN, provider: "gitlab" })).toBeNull();
+    expect(
+      unboundedCheck({ ...RUN, provider: "gitlab", event: "check_suite" }),
+    ).toBeNull();
+  });
+
+  it("still lets an unsubscribe reach a stored unnamed check_run", () => {
+    expect(handle([RUN], frame("unsubscribe", RUN))).toMatchObject({
+      reply: { type: "subscriptions", subscriptions: [] },
+      next: [],
+    });
+  });
+});
+
+describe("gatesClient", () => {
+  const sub = (extra: string) =>
+    `"subscription":{"provider":"github","event":"push","repository":"o/n"${extra}}`;
+
+  it.each([
+    [
+      "a capability probe",
+      '{"type":"list","id":"a","subscription_filters":true}',
+    ],
+    [
+      "a subscribe with a name",
+      `{"type":"subscribe","id":"a",${sub(',"name":"x"')}}`,
+    ],
+    [
+      "a subscribe with an action",
+      `{"type":"subscribe","id":"a",${sub(',"action":["x"]')}}`,
+    ],
+    [
+      "an unsubscribe with a conclusion",
+      `{"type":"unsubscribe","id":"a",${sub(',"conclusion":["x"]')}}`,
+    ],
+    [
+      "a subscribe with a workflow path",
+      `{"type":"subscribe","id":"a",${sub(',"workflow_path":"p"')}}`,
+    ],
+    ["a malformed message", "not json"],
+  ])("holds the gate for %s", (_name, message) => {
+    expect(gatesClient(message)).toBe(true);
+  });
+
+  it.each([
+    ["a plain list", '{"type":"list","id":"a"}'],
+    ["a subscribe without filters", `{"type":"subscribe","id":"a",${sub("")}}`],
+    [
+      "an unsubscribe without filters",
+      `{"type":"unsubscribe","id":"a",${sub("")}}`,
+    ],
+    ["an echo", '{"type":"echo","id":"a","nonce":"n"}'],
+  ])("leaves the gate open for %s", (_name, message) => {
+    expect(gatesClient(message)).toBe(false);
+  });
+
+  it("treats a subscribe that holds no object as unfiltered", () => {
+    expect(gatesClient('{"type":"subscribe","id":"a","subscription":1}')).toBe(
+      false,
     );
   });
 });

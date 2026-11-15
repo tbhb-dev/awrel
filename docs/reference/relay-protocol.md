@@ -2,12 +2,12 @@
 description: The messages that the awrel server and the relay Durable Object exchange over the /connect WebSocket.
 generated:
   - role: generated
-    harness: codex:0.164.0
-    model: openai:gpt-6.1-sol
-    effort: high
-    surface: exec
-    session: sha-256-64:38c02a9b47a51f7f
-    at: "2026-11-10T06:52:17Z"
+    harness: claude-code:2.1.322
+    model: anthropic:claude-sonnet-5-5
+    effort: medium
+    surface: cli
+    session: sha-256-64:dc0c7bb9a6fc4839
+    at: "2026-11-15T02:12:35Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -28,7 +28,7 @@ Every message is one JSON text frame. A client message is at most 4096 bytes, an
 
 A subscription has `provider`, optional `event` and `repository`, and optional filters `action`, `conclusion`, `name`, and `workflow_path`. `provider` matches `^[a-z0-9-]{1,32}$`. `event` matches `^[a-z0-9_.-]{1,64}$`. `repository` is `owner/name`, with 1 to 39 characters in the owner and 1 to 100 in the name, all from `[A-Za-z0-9_.-]`. The server stores `repository` in lowercase and compares event repositories without case. The relay deduplicates and sorts each filter list, and preserves names and paths exactly. Subscriptions with equal canonical fields count as the same subscription. Each filter participates in equality. An omitted filter differs from any supplied list. A socket's subscriptions live in its attachment and end with the socket.
 
-For `github`, `subscribe` requires both `event` and `repository`. A complete subscription is `{"provider":"github","event":"check_suite","repository":"owner/name"}`. Subscribe once per event type and repository. `unsubscribe` removes only an exact canonical match, including every filter. Omitting filters removes only the unfiltered subscription. For legacy incomplete subscriptions without filters, `unsubscribe` accepts an absent `event` or `repository`. Stored subscriptions keep matching until the socket closes, without further validation. Other providers follow the preceding field rules.
+For `github`, `subscribe` requires both `event` and `repository`. A complete subscription is `{"provider":"github","event":"push","repository":"owner/name"}`. Subscribe once per event type and repository. `unsubscribe` removes only an exact canonical match, including every filter. Omitting filters removes only the unfiltered subscription. For legacy incomplete subscriptions without filters, `unsubscribe` accepts an absent `event` or `repository`. The relay refuses a `github` subscription to `check_run` without a `name` filter, and any subscription to `check_suite`: either matches every check on every push of a repository, and `check_suite` has no filter that narrows it. The error is `bad_subscription` and names a filter to add: a `name` on `check_run`, or `workflow_run` with a `workflow_path`. Stored subscriptions otherwise keep matching until the socket closes, without further validation. An older relay accepted a stored `check_run` without a `name` and a stored `check_suite`. The relay removes each one and sends a notice. It checks when the Durable Object wakes, when the socket sends a message, and when an event arrives. Other providers follow the preceding field rules.
 
 ### Filters
 
@@ -84,7 +84,7 @@ A list, subscribe, or unsubscribe request with top-level `"subscription_filters"
 
 | Message | Meaning |
 | --- | --- |
-| `{"type":"subscriptions","id":ID,"subscriptions":[{...}]}` | Success reply to subscribe, unsubscribe or list, with the full list after the change. |
+| `{"type":"subscriptions","id":ID,"subscriptions":[{...}],"delivered_last_hour":[N]}` | Success reply to subscribe, unsubscribe or list, with the full list after the change. `delivered_last_hour` has one count per subscription, in the same order: the events the relay delivered for it in the last 60 minutes. Clients that don't know the field ignore it. |
 | `{"type":"error","id":ID or null,"code":string,"message":string}` | Failure reply. `id` is null when the message had no readable id. |
 | `{"type":"echoed","id":ID}` | Reply to echo, sent after its event frame on the same socket. |
 | `{"type":"pong"}` | Reply to ping, exactly these 15 bytes. |
@@ -104,6 +104,33 @@ The echo event never passes through subscription matching. It goes directly to t
 Echo uses the same serialization as a published event, with no repository field. Its delivery id and payload echo are the request nonce. `relay_received_at` follows Request for Comments (RFC) 3339 in Coordinated Universal Time (UTC). Echo leaves subscriptions unchanged. Receiving `echoed` means the event frame has already arrived on that WebSocket. The session must still confirm delivery of the event.
 
 An older relay answers echo with `{"type":"error","id":"ID","code":"bad_message","message":"unknown message type"}`. The client reports that the relay doesn't support echo yet and keeps the connection.
+
+### Delivery cap
+
+A subscription can match 100 events in any 5 minutes. Counting uses whole minutes: the current minute and the four before it, which spans 4 to 5 minutes.
+
+- When the next event would push a subscription over, the relay skips it and removes it from the socket's attachment. It sends one notice event at once and queues it, as below.
+- After a cap trip, none of the events that subscription covered arrive until the session subscribes again.
+- An event that matches many subscriptions counts once toward each of them, and the socket still gets the event while any match stays within its cap.
+- A socket that fails to receive an event doesn't count it.
+- Counts live in the Durable Object's storage, keyed by a connection id in the attachment, so they survive hibernation. They cover the connection's current subscriptions only, and go when the socket closes or fails or when the relay wakes without it.
+- If the relay can't store counts, it logs the failure and sends the event uncounted.
+
+The notice is an event from the `awrel` provider with a fresh UUID as its `delivery` and no `repository`:
+
+```json
+{"type":"event","provider":"awrel","event":"notice","delivery":"UUID","payload":{"code":"subscription_removed","reason":"rate_cap","message":"TEXT","subscription":{...},"limit":{"events":100,"minutes":5}}}
+```
+
+The `reason` field reads `rate_cap` for the cap, and `unfiltered` for a stored subscription that the earlier refusal removed. To get the events again, subscribe with narrower filters. Both kinds of notice, `unfiltered` and `rate_cap`, follow these rules:
+
+- A `rate_cap` notice also goes out at once, because a client that only listens never sends a message to release the queue. The copies share one `delivery` id and the Go client doesn't keep delivery ids, so it may show a notice up to three times.
+- Durable Object storage holds the queue, up to 10 per connection. The relay drops any beyond that.
+- A client ignores events while a filter request is pending, and the relay can't see that gate.
+- Before its reply to each of the client's next two messages, the relay sends the queued notices, unless the message is a filter request or one arrived in the last 5 seconds. Filter requests are a `list` with `subscription_filters` and a `subscribe` or `unsubscribe` with filters.
+- A client may send `list` or `echo` while a filtered request is pending, and the notice then meets a shut gate. The second send covers that case.
+- A client that sends none of those gets the notices once it does.
+- Closing the socket, or waking without it, discards them.
 
 ### Errors
 

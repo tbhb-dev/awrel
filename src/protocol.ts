@@ -64,6 +64,22 @@ export function limit(id: string): ErrorReply {
   };
 }
 
+/**
+ * Why the relay refuses a check subscription, or null when it may stay. A
+ * `check_run` without a name and any `check_suite` match every check on every
+ * push of a repository, and `check_suite` has no filter that narrows it.
+ */
+export function unboundedCheck(subscription: Subscription): string | null {
+  if (subscription.provider !== "github") return null;
+  if (subscription.event === "check_suite") {
+    return 'check_suite matches every check on every push and has no name filter; subscribe to check_run with a name filter, such as name "build", or to workflow_run with a workflow_path filter';
+  }
+  if (subscription.event === "check_run" && subscription.name === undefined) {
+    return 'check_run matches every check on every push; add a name filter, such as name "build"';
+  }
+  return null;
+}
+
 function fail(
   id: string | null,
   code: ErrorReply["code"],
@@ -352,6 +368,40 @@ function read(message: string | ArrayBuffer): Outcome | Request {
   };
 }
 
+const FILTER_FIELDS = ["action", "conclusion", "name", "workflow_path"];
+
+/**
+ * Whether the client holds its event gate shut while this message is pending:
+ * a filter-capability probe, or a request with filters. An unfiltered request
+ * proves that no gated request is pending, since a client sends one at a time.
+ * A message that earns an error counts as gated, to stay on the safe side.
+ */
+export function gatesClient(message: string | ArrayBuffer): boolean {
+  const request = read(message);
+  if ("reply" in request) return !("echo" in request);
+  if (request.type === "list") return request.subscription_filters;
+  return (
+    isRecord(request.subscription) &&
+    FILTER_FIELDS.some((field) => field in (request.subscription as object))
+  );
+}
+
+function incompleteGithub(
+  id: string,
+  subscription: Subscription,
+): Outcome | null {
+  if (subscription.provider !== "github") return null;
+  const missing = (["event", "repository"] as const).filter(
+    (field) => subscription[field] === undefined,
+  );
+  if (missing.length === 0) return null;
+  return fail(
+    id,
+    "bad_subscription",
+    `github subscription is missing ${missing.join(" and ")}; subscribe once per event type and repository`,
+  );
+}
+
 /** The reply to one client message, and the new subscription list when it changed. */
 export function handle(
   current: readonly Subscription[],
@@ -381,17 +431,11 @@ export function handle(
     next,
   });
   if (type === "subscribe") {
-    if (subscription.provider === "github") {
-      const missing = (["event", "repository"] as const).filter(
-        (field) => subscription[field] === undefined,
-      );
-      if (missing.length !== 0) {
-        return fail(
-          id,
-          "bad_subscription",
-          `github subscription is missing ${missing.join(" and ")}; subscribe once per event type and repository`,
-        );
-      }
+    const incomplete = incompleteGithub(id, subscription);
+    if (incomplete !== null) return incomplete;
+    const refused = unboundedCheck(subscription);
+    if (refused !== null) {
+      return fail(id, "bad_subscription", refused);
     }
     if (current.some((s) => same(s, subscription))) {
       return unchanged();
