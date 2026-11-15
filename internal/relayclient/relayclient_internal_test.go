@@ -30,6 +30,7 @@ const (
 	pushEvent               = "push"
 	awrelProvider           = "awrel"
 	echoEvent               = "echo"
+	noticeEvent             = "notice"
 	filterPendingReason     = "filter request pending"
 	eventKey                = "event"
 	relayIncompatibleReason = "relay incompatible"
@@ -1599,6 +1600,11 @@ func TestFilteredEventsGatedUntilAcknowledgement(t *testing.T) {
 	event := `{"type":"event","provider":"github","event":"workflow_run",` +
 		`"delivery":"before","repository":"owner/repo","payload":{}}`
 	relay.push(t, event)
+	relay.push(t, `{"type":"event","provider":"awrel","event":"notice","delivery":"removed","payload":{}}`)
+
+	if got := receive(t, events, "notice before acknowledgement"); got.Delivery != "removed" {
+		t.Fatalf("delivered %q before acknowledgement", got.Delivery)
+	}
 
 	data := subscriptionJSON(t, []protocol.Subscription{filteredSub().Canonical()})
 	relay.push(
@@ -2148,17 +2154,10 @@ func assertGatedLog(t *testing.T, logs *bytes.Buffer, reason, repo string) {
 
 	delete(line, "time")
 
-	want := map[string]any{
-		"level":      "INFO",
-		"msg":        eventKey,
-		"outcome":    "gated",
-		"delivery":   "d1",
-		"provider":   providerGitHub,
-		eventKey:     "issue_comment",
-		"repository": repo,
-		"action":     "created",
-		"reason":     reason,
-	}
+	want := gatedLogLine("d1", providerGitHub, "issue_comment", reason)
+	want["repository"] = repo
+	want["action"] = "created"
+
 	if !maps.Equal(line, want) {
 		t.Fatalf("log = %v, want %v", line, want)
 	}
@@ -2318,7 +2317,7 @@ func TestGatedAwrelEventsLogWithoutCounting(t *testing.T) {
 	t.Parallel()
 
 	for _, reason := range []string{filterPendingReason, replayPendingReason, relayIncompatibleReason} {
-		for _, name := range []string{echoEvent, "self_test", "future_test", "notice"} {
+		for _, name := range []string{echoEvent, "self_test", "future_test"} {
 			var logs bytes.Buffer
 
 			opts := quiet()
@@ -2349,10 +2348,7 @@ func TestGatedAwrelEventsLogWithoutCounting(t *testing.T) {
 
 			delete(line, "time")
 
-			want := map[string]any{
-				"level": "INFO", "msg": eventKey, "outcome": "gated", "delivery": "d1",
-				"provider": awrelProvider, eventKey: name, "reason": reason,
-			}
+			want := gatedLogLine("d1", awrelProvider, name, reason)
 			if !maps.Equal(line, want) {
 				t.Fatalf("log = %v, want %v", line, want)
 			}
@@ -2360,10 +2356,92 @@ func TestGatedAwrelEventsLogWithoutCounting(t *testing.T) {
 	}
 }
 
+func removalNotice() protocol.Event {
+	return protocol.Event{
+		Provider: awrelProvider, Event: noticeEvent, Delivery: "n1", Repository: nil,
+		Payload: json.RawMessage(`{"code":"subscription_removed","reason":"rate_cap"}`),
+	}
+}
+
+// TestNoticesPassPendingGates checks that a pending filter request or replay
+// lets through the relay's notice and nothing else.
+func TestNoticesPassPendingGates(t *testing.T) {
+	t.Parallel()
+
+	repo := "o/r"
+	notice := removalNotice()
+	others := []protocol.Event{
+		{
+			Provider:   providerGitHub,
+			Event:      noticeEvent,
+			Delivery:   "d1",
+			Repository: &repo,
+			Payload:    json.RawMessage(`{}`),
+		},
+		{Provider: awrelProvider, Event: echoEvent, Delivery: "d2", Repository: nil, Payload: json.RawMessage(`{}`)},
+	}
+
+	for _, reason := range []string{filterPendingReason, replayPendingReason} {
+		var got []protocol.Event
+
+		opts := quiet()
+		opts.OnEvent = func(_ context.Context, event protocol.Event) { got = append(got, event) }
+		client := New(opts)
+		setEventGate(client, reason)
+
+		for _, event := range append(others, notice) {
+			if !client.handle(t.Context(), event) {
+				t.Fatal("event ended reader")
+			}
+		}
+
+		// Only the GitHub event counts: awrel's own events never do.
+		_, _, gated := client.Status()
+		if gated != 1 || !reflect.DeepEqual(got, []protocol.Event{notice}) {
+			t.Fatalf("%s: delivered %+v, gated count = %d", reason, got, gated)
+		}
+	}
+}
+
+// TestIncompatibleRelayGatesNotices checks that an incompatible relay delivers
+// no notice, with or without a filter request or replay pending.
+func TestIncompatibleRelayGatesNotices(t *testing.T) {
+	t.Parallel()
+
+	for _, pending := range []string{"", filterPendingReason, replayPendingReason} {
+		var logs bytes.Buffer
+
+		opts := quiet()
+		opts.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+		opts.OnEvent = func(context.Context, protocol.Event) { t.Error("incompatible notice delivered") }
+		client := New(opts)
+		setEventGate(client, pending)
+		setEventGate(client, relayIncompatibleReason)
+
+		if !client.handle(t.Context(), removalNotice()) {
+			t.Fatal("event ended reader")
+		}
+
+		var line map[string]any
+
+		err := json.Unmarshal(logs.Bytes(), &line)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		delete(line, "time")
+
+		want := gatedLogLine("n1", awrelProvider, noticeEvent, relayIncompatibleReason)
+		if !maps.Equal(line, want) {
+			t.Fatalf("pending %q: log = %v, want %v", pending, line, want)
+		}
+	}
+}
+
 func TestAwrelEventsForwardWithoutCounting(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{echoEvent, "self_test", "notice"} {
+	for _, name := range []string{echoEvent, "self_test", noticeEvent} {
 		var got protocol.Event
 
 		opts := quiet()
@@ -2580,5 +2658,13 @@ func assertCompletedOutages(t *testing.T, changes *ledger[ConnectionChange], log
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("logs lack %q:\n%s", want, logs)
 		}
+	}
+}
+
+// gatedLogLine is the log line the client writes for an event it gates.
+func gatedLogLine(delivery, provider, event, reason string) map[string]any {
+	return map[string]any{
+		"level": "INFO", "msg": eventKey, "outcome": "gated", "delivery": delivery,
+		"provider": provider, eventKey: event, "reason": reason,
 	}
 }
