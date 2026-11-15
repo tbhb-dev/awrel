@@ -626,8 +626,14 @@ func (c *Client) handle(ctx context.Context, msg protocol.Message) bool {
 	return true
 }
 
+// handleEvent delivers an event unless the gate is shut. A pending filter
+// request or replay shuts the gate for every event but the relay's notice,
+// which tells the session that a subscription is gone and matches no filter.
+// An incompatible relay shuts it for every event.
 func (c *Client) handleEvent(ctx context.Context, message protocol.Event) {
-	if c.gated.Load() == 0 && !c.incompatible.Load() {
+	notice := message.Provider == "awrel" && message.Event == "notice"
+
+	if !c.incompatible.Load() && (c.gated.Load() == 0 || notice) {
 		c.opts.OnEvent(ctx, message)
 	} else {
 		reason := "filter request pending"

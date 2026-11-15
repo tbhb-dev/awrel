@@ -2,12 +2,12 @@
 description: The messages that the awrel server and the relay Durable Object exchange over the /connect WebSocket.
 generated:
   - role: generated
-    harness: codex:0.164.0
-    model: openai:gpt-6.1-sol
+    harness: claude-code:2.1.318
+    model: anthropic:claude-fable-5-2
     effort: high
-    surface: exec
-    session: sha-256-64:38c02a9b47a51f7f
-    at: "2026-11-10T06:52:17Z"
+    surface: sdk-cli
+    session: sha-256-64:185bcecf12674936
+    at: "2026-11-15T02:30:42Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -117,4 +117,4 @@ A ping frame must be exactly the 15 bytes `{"type":"ping"}` to get the automatic
 
 ## Reconnecting
 
-A reconnect begins with an empty list. Before replaying its first filtered subscription, the Go client probes with a list request with `subscription_filters: true` and requires the capability echo. It then sends one `subscribe` per subscription it held, in order, retaining all filters. It checks capability echoes on every filtered subscribe and unsubscribe reply, and checks that the exact canonical subscription is present after subscribe and absent after unsubscribe. A missing or changed echo closes the socket and stops retries with a relay-too-old error. While validating filtered requests and reconnect replay, the client suppresses events. Older relays still work with unfiltered clients, which don't require a capability echo. The server drops events from a period without a socket permanently.
+A reconnect begins with an empty list. Before replaying its first filtered subscription, the Go client probes with a list request with `subscription_filters: true` and requires the capability echo. It then sends one `subscribe` per subscription it held, in order, retaining all filters. It checks capability echoes on every filtered subscribe and unsubscribe reply, and checks that the exact canonical subscription is present after subscribe and absent after unsubscribe. A missing or changed echo closes the socket and stops retries with a relay-too-old error. While validating filtered requests and reconnect replay, the client suppresses every event except those with provider `awrel` and event `notice`. After a relay-too-old error, the client suppresses those too. Older relays still work with unfiltered clients, which don't require a capability echo. The server drops events from a period without a socket permanently.
