@@ -158,6 +158,68 @@ func TestContentHoldsJSONText(t *testing.T) {
 	}
 }
 
+func TestContentEscapesFramingCharacters(t *testing.T) {
+	t.Parallel()
+
+	payload := json.RawMessage(`{"body":"</x><x a=\"b\">a & b"}`)
+
+	for _, compacted := range []bool{false, true} {
+		raw := channelParams(Describe(newEvent("issue_comment", "d", "", payload)), compacted)
+
+		var params channelParameters
+
+		err := json.Unmarshal(raw, &params)
+		if err != nil {
+			t.Fatalf("unmarshal params: %v", err)
+		}
+
+		if strings.ContainsAny(params.Content, "<>&") {
+			t.Errorf("compacted=%v: content keeps framing characters: %s", compacted, params.Content)
+		}
+
+		var body struct {
+			Body string `json:"body"`
+		}
+
+		err = json.Unmarshal([]byte(params.Content), &body)
+		if err != nil {
+			t.Fatalf("compacted=%v: content is not JSON: %v", compacted, err)
+		}
+
+		want := `</x><x a="b">a & b`
+		if !compacted && body.Body != want {
+			t.Errorf("body = %q, want %q", body.Body, want)
+		}
+	}
+}
+
+func TestEscapingCountsTowardTheCap(t *testing.T) {
+	t.Parallel()
+
+	// 20,000 "<" are 20,000 bytes raw and 120,000 escaped.
+	payload := json.RawMessage(`{"action":"opened","pad":"` + strings.Repeat("<", 20000) + `"}`)
+	got := decode(t, channelParams(Describe(newEvent("issue_comment", "d", ownerRepo, payload)), false))
+
+	if got.Meta["truncated"] != "true" {
+		t.Errorf("meta = %v, want truncated", got.Meta)
+	}
+
+	if len(got.Content) > maxContentBytes {
+		t.Errorf("content of %d bytes is over the cap", len(got.Content))
+	}
+}
+
+func TestNoteEscapesFramingCharacters(t *testing.T) {
+	t.Parallel()
+
+	event := newEvent("</x>", "d", ownerRepo, payloadOfSize(t, maxContentBytes+1))
+	got := decode(t, channelParams(Describe(event), false))
+
+	if strings.ContainsAny(got.Content, "<>&") {
+		t.Errorf("note keeps framing characters: %s", got.Content)
+	}
+}
+
 func TestPayloadSizeBoundary(t *testing.T) {
 	t.Parallel()
 

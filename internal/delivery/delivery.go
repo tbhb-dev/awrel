@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"go.tbhb.dev/awrel/internal/compact"
 	"go.tbhb.dev/awrel/internal/protocol"
@@ -141,17 +142,28 @@ func channelParams(event Event, compacted bool) json.RawMessage {
 		}
 	}
 
-	content := string(payload)
+	// Escaping comes first. The size cap bounds the delivered content.
+	content := neutralize(string(payload))
 
-	if len(payload) > maxContentBytes {
+	if len(content) > maxContentBytes {
 		meta["truncated"] = "true"
 		// The note replaces the body, so no compact payload is delivered.
 		delete(meta, "compact")
 
-		content = tooLargeNote(event.Message, action, len(payload))
+		content = neutralize(tooLargeNote(event.Message, action, len(payload)))
 	}
 
 	return mustMarshal(channelParameters{Content: content, Meta: meta})
+}
+
+// neutralize escapes the framing characters in delivered content.
+func neutralize(content string) string {
+	// framing maps the characters that mark up channel content to their JSON
+	// escapes. In JSON text they occur only inside strings, so the content is
+	// the same JSON value after parsing.
+	framing := strings.NewReplacer("<", `\u003c`, ">", `\u003e`, "&", `\u0026`)
+
+	return framing.Replace(content)
 }
 
 // payloadAction returns the payload's action field. It returns "" unless the
