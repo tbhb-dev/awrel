@@ -2,7 +2,9 @@
 // Copyright Tony Burns
 
 import { env, exports } from "cloudflare:workers";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { connect } from "./connect.ts";
+import type { Env } from "./env.ts";
 import { disconnectAll, relay, TOKEN } from "./testing.ts";
 
 afterEach(() => disconnectAll(relay()));
@@ -97,4 +99,21 @@ it("answers another method with not found", async () => {
     { method: "POST" },
   );
   expectAnswer(response, 404);
+});
+
+it.each([
+  ["unset", undefined],
+  ["empty", ""],
+])("answers 503 when the connect token is %s", async (_name, token) => {
+  const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  const response = await connect(
+    new Request("https://awrel.example/connect", {
+      headers: { ...VALID, Authorization: "Bearer " },
+    }),
+    { ...env, CONNECT_TOKEN: token } as unknown as Env,
+  );
+  expect(response.status).toBe(503);
+  expect(await response.text()).toBe("Service Unavailable");
+  expect(logSpy).toHaveBeenCalledWith("connect token is not set");
+  logSpy.mockRestore();
 });

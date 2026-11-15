@@ -33,6 +33,41 @@ async function signed(
   return crypto.subtle.verify("HMAC", key, signature, body);
 }
 
+/** The largest body read: GitHub caps webhook payloads at 25 MB. */
+export const MAX_BODY_BYTES = 25 * 1024 * 1024;
+
+// The request's body, or null when it is over MAX_BODY_BYTES. A declared
+// length over the cap is refused unread; a body without one is read only up
+// to the cap, so the Worker never buffers more than the cap.
+async function cappedBody(request: Request): Promise<ArrayBuffer | null> {
+  const declared = Number(request.headers.get("Content-Length"));
+  if (!(declared <= MAX_BODY_BYTES)) {
+    return null;
+  }
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (request.body !== null) {
+    const reader = (request.body as ReadableStream<Uint8Array>).getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_BODY_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body.buffer;
+}
+
 // The `owner/name` of the repository an event concerns, when it has one.
 function repositoryOf(payload: unknown): string | null {
   const name = (payload as { repository?: { full_name?: unknown } } | null)
@@ -43,7 +78,8 @@ function repositoryOf(payload: unknown): string | null {
 /**
  * Answers a GitHub App webhook delivery: checks its signature against the
  * App's webhook secret, then hands the event to the relay. The signature is
- * checked before anything else in the request is read. Without a secret it
+ * checked before anything else in the request is read. A body over
+ * MAX_BODY_BYTES is refused with 413 before that check. Without a secret it
  * answers 503 and reads nothing.
  */
 export async function receiveGitHub(
@@ -54,7 +90,10 @@ export async function receiveGitHub(
     console.log("github webhook secret is not set");
     return new Response("Service Unavailable", { status: 503 });
   }
-  const body = await request.arrayBuffer();
+  const body = await cappedBody(request);
+  if (body === null) {
+    return new Response("Payload Too Large", { status: 413 });
+  }
   const header = request.headers.get("X-Hub-Signature-256");
   if (!(await signed(env.GITHUB_WEBHOOK_SECRET, body, header))) {
     return new Response("Unauthorized", { status: 401 });
