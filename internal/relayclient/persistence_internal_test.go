@@ -399,6 +399,56 @@ func TestSeededStartSkipsARejectedFilteredEntry(t *testing.T) {
 	}
 }
 
+func TestSeededStartDropsAnUnfilteredCheckRunWithWarning(t *testing.T) {
+	t.Parallel()
+
+	rejected := protocol.Subscription{
+		Provider: providerGitHub, Event: "check_run", Repository: "owner/repo",
+	}
+
+	const refusal = "github check_run subscription requires a name or conclusion filter"
+
+	relay := newFakeRelay(t)
+	relay.setIntercept(func(_ int, req frame) (string, bool) {
+		if req.Type == typeSubscribe && req.Subscription.Equal(rejected) {
+			return `{"type":"error","id":"` + req.ID +
+				`","code":"bad_subscription","message":"` + refusal + `"}`, true
+		}
+
+		return "", false
+	})
+
+	store := newRecordingStore(nil)
+	opts, logs := loggedClient(quiet())
+	opts.Initial = []protocol.Subscription{rejected, subA()}
+	opts.Store = store
+
+	client, _ := relay.start(t, opts)
+	awaitReady(t, client)
+
+	if got := mirrorOf(client); !sameSubscriptions(got, subA()) {
+		t.Errorf("mirror = %v, want only the accepted entry", got)
+	}
+
+	if got, want := strings.Join(store.calls.seen(), ","), "remove owner/repo"; got != want {
+		t.Errorf("store calls = %s, want %s", got, want)
+	}
+
+	text := logs.String()
+	for _, want := range []string{
+		"level=WARN",
+		"relay rejected a restored subscription",
+		"Provider:github",
+		"Event:check_run",
+		"Repository:owner/repo",
+		"bad_subscription: " + refusal,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("logs lack %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestSeededStartRemovesARejectedUnfilteredEntry(t *testing.T) {
 	t.Parallel()
 
