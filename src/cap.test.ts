@@ -279,6 +279,16 @@ describe("the notice queue", () => {
     expect([...kv.map.keys()]).toStrictEqual([]);
   });
 
+  it("loses nothing when the resend row cannot be written", () => {
+    const kv = memory();
+    enqueue(kv, "c", ["a"]);
+    kv.put = () => {
+      throw new Error("value too large");
+    };
+    expect(() => drain(kv, "c")).toThrow("value too large");
+    expect(kv.map.get("n:c")).toStrictEqual(["a"]);
+  });
+
   it("keeps the first notices when more than the limit arrive", () => {
     const kv = memory();
     const frames = Array.from({ length: MAX_PENDING + 2 }, (_, i) => String(i));

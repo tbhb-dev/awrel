@@ -7,7 +7,7 @@ generated:
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-15T01:36:17Z"
+    at: "2026-11-15T01:46:00Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -109,7 +109,7 @@ An older relay answers echo with `{"type":"error","id":"ID","code":"bad_message"
 
 A subscription can match 100 events in any 5 minutes. Counting uses whole minutes: the current minute and the four before it, which spans 4 to 5 minutes.
 
-- When the next event would push a subscription over, the relay skips it and removes it from the socket's attachment. It queues one notice event, as below.
+- When the next event would push a subscription over, the relay skips it and removes it from the socket's attachment. It sends one notice event at once and queues it, as below.
 - After a cap trip, none of the events that subscription covered arrive until the session subscribes again.
 - An event that matches many subscriptions counts once toward each of them, and the socket still gets the event while any match stays within its cap.
 - A socket that fails to receive an event doesn't count it.
@@ -124,7 +124,8 @@ The notice is an event from the `awrel` provider with a fresh UUID as its `deliv
 
 The `reason` field reads `rate_cap` for the cap, and `unfiltered` for a stored subscription that the earlier refusal removed. To get the events again, subscribe with narrower filters. Both kinds of notice, `unfiltered` and `rate_cap`, follow these rules:
 
-- Durable Object storage holds them, up to 10 per connection. The relay drops any beyond that.
+- A `rate_cap` notice also goes out at once, because a client that only listens never sends a message to release the queue. The copies share one `delivery` id and the Go client doesn't keep delivery ids, so it may show a notice up to three times.
+- Durable Object storage holds the queue, up to 10 per connection. The relay drops any beyond that.
 - A client ignores events while a filter request is pending, and the relay can't see that gate.
 - Before its reply to each of the client's next two messages, the relay sends the queued notices, unless the message is a filter request. Filter requests are a `list` with `subscription_filters` and a `subscribe` or `unsubscribe` with filters.
 - A client may send `list` or `echo` while a filtered request is pending, and the notice then meets a shut gate. The second send covers that case.

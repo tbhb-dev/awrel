@@ -340,7 +340,7 @@ export class Relay extends DurableObject {
         matched,
         minute,
       );
-      this.queueCap(id, tripped);
+      this.announceCap(socket, id, tripped);
       if (within.length === 0) continue;
       // One socket that fails mid-close mustn't stop the others from
       // receiving the event, or fail the webhook.
@@ -378,33 +378,43 @@ export class Relay extends DurableObject {
       return { id, within: [...matched], tripped: [], counted: false };
     }
     const result = this.count(id, matched, minute, screened.subscriptions);
-    if (result.tripped.length > 0) {
-      store(socket, {
-        subscriptions: screened.subscriptions.filter(
-          (s) => !result.tripped.includes(s),
-        ),
-        id,
-      });
-    }
-    return { id, ...result };
+    if (result.tripped.length === 0) return { id, ...result };
+    const stored = store(socket, {
+      subscriptions: screened.subscriptions.filter(
+        (s) => !result.tripped.includes(s),
+      ),
+      id,
+    });
+    // A subscription that stays in the attachment trips again on the next
+    // event, so it gets its notice only once its removal is stored.
+    return { id, ...result, tripped: stored ? result.tripped : [] };
   }
 
-  // Queues one notice per tripped subscription, for the same delivery as the
-  // other removal notices: the client may be holding its gate shut now.
-  private queueCap(id: string, tripped: readonly Subscription[]): void {
+  // Tells the connection about each removed subscription at once, and queues
+  // the same frames for the resend: a client that only listens never sends a
+  // message that would release the queue.
+  private announceCap(
+    socket: WebSocket,
+    id: string,
+    tripped: readonly Subscription[],
+  ): void {
     if (tripped.length === 0) return;
+    const frames = tripped.map((subscription) =>
+      noticeFrame(
+        subscription,
+        "rate_cap",
+        `removed: it matched more than ${String(CAP_EVENTS)} events in ${String(CAP_MINUTES)} minutes; subscribe again with narrower filters such as name, conclusion or action`,
+      ),
+    );
+    for (const frame of frames) {
+      try {
+        socket.send(frame);
+      } catch {
+        // The socket is closing; it has no subscriptions left to lose.
+      }
+    }
     try {
-      enqueue(
-        this.ctx.storage.kv,
-        id,
-        tripped.map((subscription) =>
-          noticeFrame(
-            subscription,
-            "rate_cap",
-            `removed: it matched more than ${String(CAP_EVENTS)} events in ${String(CAP_MINUTES)} minutes; subscribe again with narrower filters such as name, conclusion or action`,
-          ),
-        ),
-      );
+      enqueue(this.ctx.storage.kv, id, frames);
     } catch (error) {
       console.error("cap notices could not be queued", error);
     }

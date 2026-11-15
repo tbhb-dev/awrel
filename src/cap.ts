@@ -181,9 +181,10 @@ function resendSlot(id: string | undefined): string {
 export function drain(kv: SyncKvStorage, id: string | undefined): string[] {
   const fresh = kv.get<string[]>(queueSlot(id)) ?? [];
   const again = kv.get<string[]>(resendSlot(id)) ?? [];
-  kv.delete(queueSlot(id));
+  // Write the resend row first: a failed put then loses nothing.
   if (fresh.length > 0) kv.put(resendSlot(id), fresh);
   else kv.delete(resendSlot(id));
+  kv.delete(queueSlot(id));
   return [...again, ...fresh];
 }
 

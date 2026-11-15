@@ -1194,6 +1194,41 @@ describe("check subscriptions and the delivery cap", () => {
       expect(await attachments()).toMatchObject([{ subscriptions: [PULL] }]);
     });
 
+    it("sends no cap notice while the removal cannot be stored", async () => {
+      const sent: string[] = [];
+      const stored: Mutable = { subscriptions: [PUSH], id: "t" };
+      let writes = 0;
+      const socket = {
+        deserializeAttachment: () => stored,
+        serializeAttachment: () => {
+          throw new Error("too large");
+        },
+        send: (m: string) => sent.push(m),
+      } as unknown as WebSocket;
+      await runInDurableObject(relay(), (instance, state) => {
+        const { kv } = state.storage;
+        const put = kv.put.bind(kv);
+        kv.put = (key: string, value: unknown) => {
+          if (key.startsWith("n:")) writes += 1;
+          put(key, value);
+        };
+        const original = state.getWebSockets.bind(state);
+        state.getWebSockets = () => [socket];
+        const log = console.error;
+        console.error = () => undefined;
+        try {
+          for (let i = 0; i < 101; i += 1) instance.publish(EVENT);
+        } finally {
+          state.getWebSockets = original;
+          kv.put = put;
+          console.error = log;
+        }
+      });
+      // 100 events within the cap, then 1 skipped; no notice reached the socket.
+      expect(sent.filter((m) => m.includes('"notice"'))).toStrictEqual([]);
+      expect(writes).toBe(0);
+    });
+
     it("sends the event when a cap notice cannot be queued", async () => {
       const logged: unknown[][] = [];
       const client = await dial();
@@ -1281,13 +1316,15 @@ describe("check subscriptions and the delivery cap", () => {
     expect(await relay().publish(EVENT)).toBe(0);
     expect(await relay().publish(EVENT)).toBe(0);
     await settle();
-    expect(frames(client).filter((f) => f.event === "notice")).toHaveLength(0);
+    // A listen-only client gets the notice at once.
+    expect(frames(client).filter((f) => f.event === "notice")).toHaveLength(1);
     client.socket.send(list);
     await settle();
     const received = frames(client);
     expect(received.filter((f) => f.event === "push")).toHaveLength(100);
     const notices = received.filter((f) => f.event === "notice");
-    expect(notices).toHaveLength(1);
+    expect(notices).toHaveLength(2);
+    expect(notices[1]).toStrictEqual(notices[0]);
     expect(notices[0]).toMatchObject({
       provider: "awrel",
       payload: {
