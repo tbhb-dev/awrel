@@ -236,43 +236,41 @@ func TestNoteEscapesFramingCharacters(t *testing.T) {
 func TestPayloadSizeBoundary(t *testing.T) {
 	t.Parallel()
 
-	t.Run("exactly the cap is delivered whole", func(t *testing.T) {
-		t.Parallel()
+	for _, test := range []struct {
+		name      string
+		size      int
+		truncated bool
+	}{
+		{name: "exactly the cap is delivered whole", size: maxContentBytes, truncated: false},
+		{name: "one byte over is replaced by a note", size: maxContentBytes + 1, truncated: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 
-		event := newEvent("issue_comment", "d9", ownerRepo, payloadOfSize(t, maxContentBytes))
-		got := decode(t, channelParams(Describe(event), false))
+			event := newEvent("issue_comment", "d9", ownerRepo, payloadOfSize(t, test.size))
+			got := decode(t, channelParams(Describe(event), false))
+			want := string(event.Payload)
+			wantMeta := metaOf("issue_comment", "d9", "repository", ownerRepo, "action", "opened")
 
-		if got.Content != string(event.Payload) {
-			t.Errorf("content of %d bytes is not the payload", len(got.Content))
-		}
+			if test.truncated {
+				want = `github event "issue_comment", action "opened", repository o/r, delivery d9. ` +
+					`The payload is ` + strconv.Itoa(test.size) + ` bytes before escaping, too large to deliver. ` + noteTail
+				wantMeta["truncated"] = trueValue
+			}
 
-		if _, truncated := got.Meta["truncated"]; truncated {
-			t.Error("meta marks a whole payload as truncated")
-		}
-	})
+			if got.Content != want {
+				t.Errorf("content of %d bytes differs from expected content of %d bytes", len(got.Content), len(want))
+			}
 
-	t.Run("one byte over is replaced by a note", func(t *testing.T) {
-		t.Parallel()
+			if !maps.Equal(got.Meta, wantMeta) {
+				t.Errorf("meta = %v, want %v", got.Meta, wantMeta)
+			}
 
-		got := decode(
-			t,
-			channelParams(
-				Describe(newEvent("issue_comment", "d9", ownerRepo, payloadOfSize(t, maxContentBytes+1))),
-				false,
-			),
-		)
-
-		want := `github event "issue_comment", action "opened", repository o/r, delivery d9. ` +
-			`The payload is 65537 bytes before escaping, too large to deliver. ` + noteTail
-		if got.Content != want {
-			t.Errorf("content = %q, want %q", got.Content, want)
-		}
-
-		wantMeta := metaOf("issue_comment", "d9", "repository", ownerRepo, "action", "opened", "truncated", trueValue)
-		if !maps.Equal(got.Meta, wantMeta) {
-			t.Errorf("meta = %v, want %v", got.Meta, wantMeta)
-		}
-	})
+			if _, truncated := got.Meta["truncated"]; truncated != test.truncated {
+				t.Errorf("truncated attribute present = %v, want %v", truncated, test.truncated)
+			}
+		})
+	}
 
 	t.Run("a note leaves out what is unknown", func(t *testing.T) {
 		t.Parallel()
@@ -424,6 +422,14 @@ func TestCompactChannelStillOverCapGetsNote(t *testing.T) {
 		` bytes before escaping, too large to deliver. ` + noteTail
 	if got.Content != want {
 		t.Errorf("content = %q, want %q", got.Content, want)
+	}
+
+	if got.Meta["truncated"] != trueValue {
+		t.Errorf("meta = %v, want truncated", got.Meta)
+	}
+
+	if _, compacted := got.Meta["compact"]; compacted {
+		t.Error("meta marks a note as compact")
 	}
 
 	wantMeta := metaOf(pingEvent, "d4", "action", "opened", "truncated", trueValue)

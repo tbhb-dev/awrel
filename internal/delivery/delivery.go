@@ -25,7 +25,9 @@ const (
 	// maxContentBytes is the largest payload delivered whole. A larger one is
 	// replaced by a short note.
 	maxContentBytes = 64 * 1024
-	maxFieldBytes   = 256
+
+	// maxFieldBytes is the largest attribute value kept in a note or in the meta, in bytes.
+	maxFieldBytes = 256
 )
 
 // Event holds the metadata extracted once for logging and delivery.
@@ -149,10 +151,13 @@ func channelParams(event Event, compacted bool) json.RawMessage {
 		}
 	}
 
-	// Escaping comes first. The size cap bounds the delivered content.
-	content := neutralize(string(payload))
+	var content string
 
-	if len(content) > maxContentBytes {
+	if len(payload) <= maxContentBytes {
+		content = neutralize(string(payload))
+	}
+
+	if len(payload) > maxContentBytes || len(content) > maxContentBytes {
 		meta["truncated"] = "true"
 		// The note replaces the body, so no compact payload is delivered.
 		delete(meta, "compact")
@@ -173,6 +178,7 @@ func neutralize(content string) string {
 	return framing.Replace(content)
 }
 
+// clip cuts at maxFieldBytes and drops a rune split by the cut.
 func clip(s string) string {
 	if len(s) > maxFieldBytes {
 		return strings.ToValidUTF8(s[:maxFieldBytes], "")
