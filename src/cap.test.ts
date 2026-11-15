@@ -7,7 +7,7 @@ import {
   CAP_MINUTES,
   charge,
   delivered,
-  dequeue,
+  drain,
   enqueue,
   forget,
   forgetOthers,
@@ -267,25 +267,31 @@ describe("keeping the record to live subscriptions", () => {
 });
 
 describe("the notice queue", () => {
-  it("returns what was queued once, then nothing", () => {
+  it("returns each notice twice, then nothing", () => {
     const kv = memory();
     enqueue(kv, "c", ["a"]);
     enqueue(kv, "c", ["b"]);
-    expect(dequeue(kv, "c")).toStrictEqual(["a", "b"]);
-    expect(dequeue(kv, "c")).toStrictEqual([]);
+    expect(drain(kv, "c")).toStrictEqual(["a", "b"]);
+    enqueue(kv, "c", ["c"]);
+    expect(drain(kv, "c")).toStrictEqual(["a", "b", "c"]);
+    expect(drain(kv, "c")).toStrictEqual(["c"]);
+    expect(drain(kv, "c")).toStrictEqual([]);
+    expect([...kv.map.keys()]).toStrictEqual([]);
   });
 
   it("keeps the first notices when more than the limit arrive", () => {
     const kv = memory();
     const frames = Array.from({ length: MAX_PENDING + 2 }, (_, i) => String(i));
     enqueue(kv, "c", frames);
-    expect(dequeue(kv, "c")).toStrictEqual(frames.slice(0, MAX_PENDING));
+    expect(drain(kv, "c")).toStrictEqual(frames.slice(0, MAX_PENDING));
   });
 
   it("forget drops the queue with the counts", () => {
     const kv = memory();
     charge(kv, "c", [A], 10, [A]);
     enqueue(kv, "c", ["a"]);
+    drain(kv, "c");
+    enqueue(kv, "c", ["b"]);
     forget(kv, "c");
     expect([...kv.map.keys()]).toStrictEqual([]);
   });
@@ -294,6 +300,7 @@ describe("the notice queue", () => {
     const kv = memory();
     enqueue(kv, "live", ["a"]);
     enqueue(kv, "gone", ["b"]);
+    drain(kv, "gone");
     forgetOthers(kv, new Set(["live"]));
     expect([...kv.map.keys()]).toStrictEqual(["n:live"]);
   });

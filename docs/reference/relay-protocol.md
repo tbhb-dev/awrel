@@ -7,7 +7,7 @@ generated:
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-15T01:07:50Z"
+    at: "2026-11-15T01:36:17Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -109,7 +109,7 @@ An older relay answers echo with `{"type":"error","id":"ID","code":"bad_message"
 
 A subscription can match 100 events in any 5 minutes. Counting uses whole minutes: the current minute and the four before it, which spans 4 to 5 minutes.
 
-- When the next event would push a subscription over, the relay skips it and removes it from the socket's attachment. One notice event follows before any other frame for that event.
+- When the next event would push a subscription over, the relay skips it and removes it from the socket's attachment. It queues one notice event, as below.
 - After a cap trip, none of the events that subscription covered arrive until the session subscribes again.
 - An event that matches many subscriptions counts once toward each of them, and the socket still gets the event while any match stays within its cap.
 - A socket that fails to receive an event doesn't count it.
@@ -122,11 +122,12 @@ The notice is an event from the `awrel` provider with a fresh UUID as its `deliv
 {"type":"event","provider":"awrel","event":"notice","delivery":"UUID","payload":{"code":"subscription_removed","reason":"rate_cap","message":"TEXT","subscription":{...},"limit":{"events":100,"minutes":5}}}
 ```
 
-The `reason` field reads `rate_cap` for the cap, and `unfiltered` for a stored subscription that the earlier refusal removed. To get the events again, subscribe with narrower filters. Notices for removed stored subscriptions follow these rules:
+The `reason` field reads `rate_cap` for the cap, and `unfiltered` for a stored subscription that the earlier refusal removed. To get the events again, subscribe with narrower filters. Both kinds of notice, `unfiltered` and `rate_cap`, follow these rules:
 
 - Durable Object storage holds them, up to 10 per connection. The relay drops any beyond that.
-- Delivery waits for the client's event gate, which the relay can't see. A client ignores events while a filter request is pending.
-- Queued notices go out just before the relay's reply to the client's next message that proves the gate open. Those messages are a `list` without `subscription_filters`, an unfiltered `subscribe` or `unsubscribe`, and an `echo`.
+- A client ignores events while a filter request is pending, and the relay can't see that gate.
+- Before its reply to each of the client's next two messages, the relay sends the queued notices, unless the message is a filter request. Filter requests are a `list` with `subscription_filters` and a `subscribe` or `unsubscribe` with filters.
+- A client may send `list` or `echo` while a filtered request is pending, and the notice then meets a shut gate. The second send covers that case.
 - A client that sends none of those gets the notices once it does.
 - Closing the socket, or waking without it, discards them.
 

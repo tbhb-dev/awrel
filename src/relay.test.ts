@@ -899,9 +899,13 @@ describe("check subscriptions and the delivery cap", () => {
       "notice",
       "subscriptions",
     ]);
+    // A second send covers a client that dropped the first.
     client.socket.send(list);
     await settle();
-    expect(client.received).toHaveLength(3);
+    expect(client.received).toHaveLength(4);
+    client.socket.send(list);
+    await settle();
+    expect(client.received).toHaveLength(5);
   });
 
   it("holds the notice for a filtered unsubscribe too", async () => {
@@ -1061,6 +1065,10 @@ describe("check subscriptions and the delivery cap", () => {
         console.error = (...args: unknown[]) => logged.push(args);
         try {
           instance.webSocketMessage(
+            socketOf({ subscriptions: [], id: "m" }, (m) => sent.push(m)),
+            list,
+          );
+          instance.webSocketMessage(
             socketOf({ subscriptions: [] }, (m) => sent.push(m)),
             list,
           );
@@ -1069,9 +1077,147 @@ describe("check subscriptions and the delivery cap", () => {
           console.error = log;
         }
       });
-      expect(logged[0]?.[0]).toBe("removal notices could not be sent");
+      // The connection without an id has no queue to read.
+      expect(logged.map((l) => l[0])).toStrictEqual([
+        "removal notices could not be sent",
+      ]);
       expect(sent.map((m) => (JSON.parse(m) as Frame).type)).toStrictEqual([
         "subscriptions",
+        "subscriptions",
+      ]);
+    });
+
+    it("replies without counts when they cannot be read", async () => {
+      const logged: unknown[][] = [];
+      const sent: string[] = [];
+      await runInDurableObject(relay(), (instance, state) => {
+        const { kv } = state.storage;
+        const get = kv.get.bind(kv);
+        kv.get = (key: string) => {
+          if (key.startsWith("c:")) throw new Error("storage unavailable");
+          return get(key);
+        };
+        const log = console.error;
+        console.error = (...args: unknown[]) => logged.push(args);
+        try {
+          instance.webSocketMessage(
+            socketOf({ subscriptions: [], id: "q" }, (m) => sent.push(m)),
+            list,
+          );
+        } finally {
+          kv.get = get;
+          console.error = log;
+        }
+      });
+      expect(logged.map((l) => l[0])).toStrictEqual([
+        "delivery counts could not be read",
+      ]);
+      expect(sent.map((m) => JSON.parse(m) as unknown)).toStrictEqual([
+        { type: "subscriptions", id: "l", subscriptions: [] },
+      ]);
+    });
+
+    it("starts when stale rows cannot be dropped", async () => {
+      const logged: unknown[][] = [];
+      await runInDurableObject(relay(), (instance, state) => {
+        const { kv } = state.storage;
+        const list = kv.list.bind(kv);
+        kv.list = () => {
+          throw new Error("storage unavailable");
+        };
+        const log = console.error;
+        console.error = (...args: unknown[]) => logged.push(args);
+        try {
+          const Made = instance.constructor as new (
+            ctx: DurableObjectState,
+            env: unknown,
+          ) => unknown;
+          expect(new Made(state, {})).toBeDefined();
+        } finally {
+          kv.list = list;
+          console.error = log;
+        }
+      });
+      expect(logged.map((l) => l[0])).toStrictEqual([
+        "stale connection rows could not be dropped",
+      ]);
+    });
+
+    it("sends the event, and writes nothing, when a new connection's id cannot be stored", async () => {
+      const writes: string[] = [];
+      const logged: unknown[][] = [];
+      let delivered = 0;
+      const socket = {
+        deserializeAttachment: () => ({ subscriptions: [PUSH] }),
+        serializeAttachment: () => {
+          throw new Error("too large");
+        },
+        send: () => {
+          delivered += 1;
+          throw new Error("closing");
+        },
+      } as unknown as WebSocket;
+      const reached = await runInDurableObject(relay(), (instance, state) => {
+        const { kv } = state.storage;
+        const put = kv.put.bind(kv);
+        kv.put = (key: string, value: unknown) => {
+          writes.push(key);
+          put(key, value);
+        };
+        const original = state.getWebSockets.bind(state);
+        state.getWebSockets = () => [socket];
+        const log = console.error;
+        console.error = (...args: unknown[]) => logged.push(args);
+        try {
+          return instance.publish(EVENT);
+        } finally {
+          state.getWebSockets = original;
+          kv.put = put;
+          console.error = log;
+        }
+      });
+      expect(reached).toBe(0);
+      expect(delivered).toBe(1);
+      expect(writes).toStrictEqual([]);
+      expect(logged.map((l) => l[0])).toStrictEqual([
+        "connection state could not be stored",
+      ]);
+    });
+
+    it("keeps the other subscriptions when one trips the cap", async () => {
+      const client = await dial();
+      const PULL = { provider: "github", event: "pull_request" };
+      await exchange(client, subscribe("s", PUSH));
+      await plant({ subscriptions: [PUSH, PULL] });
+      for (let i = 0; i < 100; i += 1) await relay().publish(EVENT);
+      expect(await relay().publish(EVENT)).toBe(0);
+      expect(await attachments()).toMatchObject([{ subscriptions: [PULL] }]);
+    });
+
+    it("sends the event when a cap notice cannot be queued", async () => {
+      const logged: unknown[][] = [];
+      const client = await dial();
+      await exchange(client, subscribe("s", PUSH));
+      for (let i = 0; i < 100; i += 1) await relay().publish(EVENT);
+      const reached = await runInDurableObject(relay(), (instance, state) => {
+        const { kv } = state.storage;
+        const put = kv.put.bind(kv);
+        kv.put = (key: string, value: unknown) => {
+          if (key.startsWith("n:")) throw new Error("value too large");
+          put(key, value);
+        };
+        const log = console.error;
+        console.error = (...args: unknown[]) => logged.push(args);
+        try {
+          return instance.publish(EVENT);
+        } finally {
+          kv.put = put;
+          console.error = log;
+        }
+      });
+      expect(reached).toBe(0);
+      expect(logged.map((l) => l[0])).toStrictEqual([
+        "cap notices could not be queued",
       ]);
     });
   });
@@ -1135,6 +1281,9 @@ describe("check subscriptions and the delivery cap", () => {
     expect(await relay().publish(EVENT)).toBe(0);
     expect(await relay().publish(EVENT)).toBe(0);
     await settle();
+    expect(frames(client).filter((f) => f.event === "notice")).toHaveLength(0);
+    client.socket.send(list);
+    await settle();
     const received = frames(client);
     expect(received.filter((f) => f.event === "push")).toHaveLength(100);
     const notices = received.filter((f) => f.event === "notice");
@@ -1150,7 +1299,7 @@ describe("check subscriptions and the delivery cap", () => {
         limit: { events: 100, minutes: 5 },
       },
     });
-    expect(await exchange(client, list)).toStrictEqual(subscriptions("l", []));
+    expect(received.at(-1)).toStrictEqual(subscriptions("l", []));
   });
 
   it("keeps delivering to a subscription that shares the event with a capped one", async () => {
@@ -1164,9 +1313,9 @@ describe("check subscriptions and the delivery cap", () => {
     expect(other.repository.toLowerCase()).toBe(PUSH.repository);
     expect(await relay().publish(EVENT)).toBe(0);
     await settle();
-    expect(await exchange(client, list)).toMatchObject({
-      subscriptions: [],
-    });
+    client.socket.send(list);
+    await settle();
+    expect(frames(client).at(-1)).toMatchObject({ subscriptions: [] });
   });
 
   it("counts across an eviction", async () => {
@@ -1179,7 +1328,9 @@ describe("check subscriptions and the delivery cap", () => {
     }
     await evictDurableObject(relay());
     expect(await relay().publish(EVENT)).toBe(0);
-    expect(await exchange(client, list)).toMatchObject({ subscriptions: [] });
+    client.socket.send(list);
+    await settle();
+    expect(frames(client).at(-1)).toMatchObject({ subscriptions: [] });
   });
 
   it("forgets a connection's counts when it closes", async () => {
@@ -1358,7 +1509,9 @@ describe("check subscriptions and the delivery cap", () => {
         .map((f) => f.event),
     ).toStrictEqual(["push"]);
     expect(await attachments()).toMatchObject([{ subscriptions: [PUSH] }]);
-    expect(logged[0]?.[0]).toBe("delivery counts could not be stored");
+    expect(logged.map((l) => l[0])).toStrictEqual([
+      "delivery counts could not be stored",
+    ]);
   });
 
   it("takes back the count of an event a socket never got", async () => {

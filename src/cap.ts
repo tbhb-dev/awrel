@@ -167,17 +167,31 @@ export function enqueue(
   kv.put(queueSlot(id), [...queued, ...frames].slice(0, MAX_PENDING));
 }
 
-/** Takes a connection's queued removal notices, leaving its queue empty. */
-export function dequeue(kv: SyncKvStorage, id: string | undefined): string[] {
-  const queued = kv.get<string[]>(queueSlot(id)) ?? [];
+// Notices that went out once wait here for one more send. Another goroutine
+// can call list or echo while a filtered request is pending, which the relay
+// can't see, and the client then drops what the relay just sent.
+function resendSlot(id: string | undefined): string {
+  return `r:${String(id)}`;
+}
+
+/**
+ * Takes the notices to send now: those queued since the last send, and those
+ * sent once already. The fresh ones wait for a second send, then go.
+ */
+export function drain(kv: SyncKvStorage, id: string | undefined): string[] {
+  const fresh = kv.get<string[]>(queueSlot(id)) ?? [];
+  const again = kv.get<string[]>(resendSlot(id)) ?? [];
   kv.delete(queueSlot(id));
-  return queued;
+  if (fresh.length > 0) kv.put(resendSlot(id), fresh);
+  else kv.delete(resendSlot(id));
+  return [...again, ...fresh];
 }
 
 /** Drops the counts and queued notices of a connection that closed. */
 export function forget(kv: SyncKvStorage, id: string | undefined): void {
   kv.delete(slot(id));
   kv.delete(queueSlot(id));
+  kv.delete(resendSlot(id));
 }
 
 /** Drops the counts and queued notices of every connection not in `live`. */
@@ -185,7 +199,7 @@ export function forgetOthers(
   kv: SyncKvStorage,
   live: ReadonlySet<string>,
 ): void {
-  for (const prefix of ["c:", "n:"]) {
+  for (const prefix of ["c:", "n:", "r:"]) {
     for (const [name] of [...kv.list({ prefix })]) {
       if (!live.has(name.slice(2))) kv.delete(name);
     }

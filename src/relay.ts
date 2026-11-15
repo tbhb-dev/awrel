@@ -7,7 +7,7 @@ import {
   CAP_MINUTES,
   charge,
   delivered,
-  dequeue,
+  drain,
   enqueue,
   forget,
   forgetOthers,
@@ -48,12 +48,14 @@ export interface Attachment {
   readonly id?: string;
 }
 
-// The event still goes out when this fails; the cap trips again on the next.
-function store(socket: WebSocket, attachment: Attachment): void {
+// A caller carries on when this fails: the event still goes out.
+function store(socket: WebSocket, attachment: Attachment): boolean {
   try {
     socket.serializeAttachment(attachment);
+    return true;
   } catch (error) {
     console.error("connection state could not be stored", error);
+    return false;
   }
 }
 
@@ -79,20 +81,6 @@ function noticeFrame(
       limit: { events: CAP_EVENTS, minutes: CAP_MINUTES },
     },
   });
-}
-
-// Sends the notice at once.
-function notice(
-  socket: WebSocket,
-  subscription: Subscription,
-  reason: "unfiltered" | "rate_cap",
-  message: string,
-): void {
-  try {
-    socket.send(noticeFrame(subscription, reason, message));
-  } catch {
-    // The socket is closing; it has no subscriptions left to lose.
-  }
 }
 
 // Read only fixed fields on the event's own object, once per publication.
@@ -138,24 +126,6 @@ export function connectionId(attachment: Attachment | null): string {
   return String(attachment?.id);
 }
 
-/**
- * The relay between webhook providers and MCP connections. One instance
- * holds every connection, as hibernatable WebSockets.
- */
-function announceCap(
-  socket: WebSocket,
-  tripped: readonly Subscription[],
-): void {
-  for (const subscription of tripped) {
-    notice(
-      socket,
-      subscription,
-      "rate_cap",
-      `removed: it matched more than ${String(CAP_EVENTS)} events in ${String(CAP_MINUTES)} minutes; subscribe again with narrower filters such as name, conclusion or action`,
-    );
-  }
-}
-
 export class Relay extends DurableObject {
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
@@ -174,7 +144,12 @@ export class Relay extends DurableObject {
       );
       live.add(connectionId(attachment));
     }
-    forgetOthers(ctx.storage.kv, live);
+    try {
+      forgetOthers(ctx.storage.kv, live);
+    } catch (error) {
+      // Stale rows are harmless; a throw here would stop every publish.
+      console.error("stale connection rows could not be dropped", error);
+    }
   }
 
   // Removes the stored subscriptions that a check refuses and queues a
@@ -221,8 +196,9 @@ export class Relay extends DurableObject {
   // Sends the queued removal notices. Called only for a message that proves
   // the client's event gate is open (see `gatesClient`), before its reply.
   private deliverNotices(ws: WebSocket, attachment: Attachment): void {
+    if (attachment.id === undefined) return;
     try {
-      for (const frame of dequeue(this.ctx.storage.kv, attachment.id)) {
+      for (const frame of drain(this.ctx.storage.kv, attachment.id)) {
         ws.send(frame);
       }
     } catch (error) {
@@ -310,16 +286,32 @@ export class Relay extends DurableObject {
         reply.type === "subscriptions"
           ? {
               ...reply,
-              delivered_last_hour: delivered(
-                this.ctx.storage.kv,
-                attachment.id,
-                reply.subscriptions,
-                thisMinute(),
-              ),
+              ...this.lastHour(attachment.id, reply.subscriptions),
             }
           : reply,
       ),
     );
+  }
+
+  // The counts are extra: a storage failure leaves them out and the reply
+  // still goes.
+  private lastHour(
+    id: string | undefined,
+    subscriptions: readonly Subscription[],
+  ): { delivered_last_hour?: number[] } {
+    try {
+      return {
+        delivered_last_hour: delivered(
+          this.ctx.storage.kv,
+          id,
+          subscriptions,
+          thisMinute(),
+        ),
+      };
+    } catch (error) {
+      console.error("delivery counts could not be read", error);
+      return {};
+    }
   }
 
   /**
@@ -342,22 +334,13 @@ export class Relay extends DurableObject {
         matches(s, event, fields),
       );
       if (matched.length === 0) continue;
-      const id = screened.id ?? crypto.randomUUID();
-      const { within, tripped, counted } = this.count(
-        id,
+      const { id, within, tripped, counted } = this.charged(
+        socket,
+        screened,
         matched,
         minute,
-        screened.subscriptions,
       );
-      if (tripped.length > 0 || screened.id === undefined) {
-        store(socket, {
-          subscriptions: screened.subscriptions.filter(
-            (s) => !tripped.includes(s),
-          ),
-          id,
-        });
-      }
-      announceCap(socket, tripped);
+      this.queueCap(id, tripped);
       if (within.length === 0) continue;
       // One socket that fails mid-close mustn't stop the others from
       // receiving the event, or fail the webhook.
@@ -371,6 +354,60 @@ export class Relay extends DurableObject {
       }
     }
     return reached;
+  }
+
+  // Gives a new connection its id, charges the matched subscriptions and
+  // removes the ones that tripped. An id that cannot be stored would leave
+  // orphan counts, so the event goes out uncounted instead.
+  private charged(
+    socket: WebSocket,
+    screened: Attachment,
+    matched: readonly Subscription[],
+    minute: number,
+  ): {
+    id: string;
+    within: Subscription[];
+    tripped: Subscription[];
+    counted: boolean;
+  } {
+    const id = screened.id ?? crypto.randomUUID();
+    if (
+      screened.id === undefined &&
+      !store(socket, { subscriptions: screened.subscriptions, id })
+    ) {
+      return { id, within: [...matched], tripped: [], counted: false };
+    }
+    const result = this.count(id, matched, minute, screened.subscriptions);
+    if (result.tripped.length > 0) {
+      store(socket, {
+        subscriptions: screened.subscriptions.filter(
+          (s) => !result.tripped.includes(s),
+        ),
+        id,
+      });
+    }
+    return { id, ...result };
+  }
+
+  // Queues one notice per tripped subscription, for the same delivery as the
+  // other removal notices: the client may be holding its gate shut now.
+  private queueCap(id: string, tripped: readonly Subscription[]): void {
+    if (tripped.length === 0) return;
+    try {
+      enqueue(
+        this.ctx.storage.kv,
+        id,
+        tripped.map((subscription) =>
+          noticeFrame(
+            subscription,
+            "rate_cap",
+            `removed: it matched more than ${String(CAP_EVENTS)} events in ${String(CAP_MINUTES)} minutes; subscribe again with narrower filters such as name, conclusion or action`,
+          ),
+        ),
+      );
+    } catch (error) {
+      console.error("cap notices could not be queued", error);
+    }
   }
 
   // Charges the matched subscriptions. A storage failure must not stop the
