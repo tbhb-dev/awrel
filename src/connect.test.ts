@@ -117,3 +117,13 @@ it.each([
   expect(logSpy).toHaveBeenCalledWith("connect token is not set");
   logSpy.mockRestore();
 });
+
+it("answers 503 before it checks the upgrade or the bearer token", async () => {
+  const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  const response = await connect(new Request("https://awrel.example/connect"), {
+    ...env,
+    CONNECT_TOKEN: "",
+  } as unknown as Env);
+  expect(response.status).toBe(503);
+  logSpy.mockRestore();
+});
