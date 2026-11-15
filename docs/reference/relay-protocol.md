@@ -7,7 +7,7 @@ generated:
     effort: medium
     surface: cli
     session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-15T00:06:02Z"
+    at: "2026-11-15T00:35:36Z"
 status: stable
 tags: [protocol, websocket, relay]
 title: Relay WebSocket protocol
@@ -122,7 +122,7 @@ The notice is an event from the `awrel` provider with a fresh UUID as its `deliv
 {"type":"event","provider":"awrel","event":"notice","delivery":"UUID","payload":{"code":"subscription_removed","reason":"rate_cap","message":"TEXT","subscription":{...},"limit":{"events":100,"minutes":5}}}
 ```
 
-The `reason` field reads `rate_cap` for the cap, and `unfiltered` for a stored subscription that the earlier refusal removed. To get the events again, subscribe with narrower filters. A removal that a client's own message caused gets its notice after the reply to that message, since a client ignores events while it waits for a reply.
+The `reason` field reads `rate_cap` for the cap, and `unfiltered` for a stored subscription that the earlier refusal removed. To get the events again, subscribe with narrower filters. The relay queues the notice for a removed stored subscription in the socket's attachment, up to 3 per connection, and sends it 5 seconds later. A client ignores events while a filter request is pending, and the relay can't see that gate, so the client would drop a notice that arrived beside a reply.
 
 ### Errors
 

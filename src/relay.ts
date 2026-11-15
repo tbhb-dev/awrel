@@ -43,13 +43,44 @@ export interface Attachment {
   readonly subscriptions: readonly Subscription[];
   /** Names the connection's delivery counts; set on its first matching event. */
   readonly id?: string;
+  /**
+   * Removal notices (as event frames) waiting for the client's event gate to
+   * open. A client ignores events while one of its filter requests is
+   * pending, so a notice sent beside a reply would be lost.
+   */
+  readonly pending?: readonly string[];
 }
+
+/** How long a removal notice waits before it is sent, in milliseconds. */
+const NOTICE_DELAY_MS = 5000;
+/** The most notices kept for one connection; later ones are dropped. */
+const MAX_PENDING = 3;
 
 function thisMinute(): number {
   return Math.floor(Date.now() / 60_000);
 }
 
-// Tells the connection that the relay removed a subscription, and why.
+// The frame that tells a connection the relay removed a subscription, and why.
+function noticeFrame(
+  subscription: Subscription,
+  reason: "unfiltered" | "rate_cap",
+  message: string,
+): string {
+  return eventFrame({
+    provider: "awrel",
+    event: "notice",
+    delivery: crypto.randomUUID(),
+    payload: {
+      code: "subscription_removed",
+      reason,
+      message,
+      subscription,
+      limit: { events: CAP_EVENTS, minutes: CAP_MINUTES },
+    },
+  });
+}
+
+// Sends the notice at once.
 function notice(
   socket: WebSocket,
   subscription: Subscription,
@@ -57,20 +88,7 @@ function notice(
   message: string,
 ): void {
   try {
-    socket.send(
-      eventFrame({
-        provider: "awrel",
-        event: "notice",
-        delivery: crypto.randomUUID(),
-        payload: {
-          code: "subscription_removed",
-          reason,
-          message,
-          subscription,
-          limit: { events: CAP_EVENTS, minutes: CAP_MINUTES },
-        },
-      }),
-    );
+    socket.send(noticeFrame(subscription, reason, message));
   } catch {
     // The socket is closing; it has no subscriptions left to lose.
   }
@@ -123,6 +141,20 @@ export function connectionId(attachment: Attachment | null): string {
  * The relay between webhook providers and MCP connections. One instance
  * holds every connection, as hibernatable WebSockets.
  */
+function announceCap(
+  socket: WebSocket,
+  tripped: readonly Subscription[],
+): void {
+  for (const subscription of tripped) {
+    notice(
+      socket,
+      subscription,
+      "rate_cap",
+      `removed: it matched more than ${String(CAP_EVENTS)} events in ${String(CAP_MINUTES)} minutes; subscribe again with narrower filters such as name, conclusion or action`,
+    );
+  }
+}
+
 export class Relay extends DurableObject {
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
@@ -144,14 +176,12 @@ export class Relay extends DurableObject {
     forgetOthers(ctx.storage.kv, live);
   }
 
-  // Removes the stored subscriptions that a check refuses, with a notice for
-  // each, and returns the attachment as it stands afterwards. With `later`,
-  // the notices go into it for the caller to send, so that a reply can come
-  // first: a client that waits for a reply ignores events until then.
+  // Removes the stored subscriptions that a check refuses and queues a
+  // notice for each in the attachment, for `alarm` to send once the client's
+  // gate is open. Returns the attachment as it stands afterwards.
   private screen(
     socket: WebSocket,
     attachment: Attachment | null,
-    later?: Array<() => void>,
   ): Attachment | null {
     if (attachment === null) return null;
     const refusals = attachment.subscriptions.flatMap((subscription) => {
@@ -164,16 +194,34 @@ export class Relay extends DurableObject {
       subscriptions: attachment.subscriptions.filter(
         (subscription) => unboundedCheck(subscription) === null,
       ),
+      pending: [
+        ...(attachment.pending ?? []),
+        ...refusals.map(({ subscription, message }) =>
+          noticeFrame(subscription, "unfiltered", message),
+        ),
+      ].slice(0, MAX_PENDING),
     };
     socket.serializeAttachment(next);
-    for (const { subscription, message } of refusals) {
-      const send = () => {
-        notice(socket, subscription, "unfiltered", message);
-      };
-      if (later === undefined) send();
-      else later.push(send);
-    }
+    this.ctx.storage
+      .setAlarm(Date.now() + NOTICE_DELAY_MS)
+      .catch((error: unknown) => {
+        console.error("notice alarm could not be set", error);
+      });
     return next;
+  }
+
+  /** Sends the queued removal notices to the sockets that wait for them. */
+  override alarm(): void {
+    for (const socket of this.ctx.getWebSockets()) {
+      const attachment = socket.deserializeAttachment() as Attachment | null;
+      if (attachment?.pending === undefined) continue;
+      try {
+        for (const frame of attachment.pending) socket.send(frame);
+      } catch {
+        // The socket is closing; it has no subscriptions left to lose.
+      }
+      socket.serializeAttachment({ ...attachment, pending: undefined });
+    }
   }
 
   /** Forgets the delivery counts of a connection that closed. */
@@ -206,11 +254,9 @@ export class Relay extends DurableObject {
     ws: WebSocket,
     message: string | ArrayBuffer,
   ): void {
-    const notices: Array<() => void> = [];
     const attachment = this.screen(
       ws,
       ws.deserializeAttachment() as Attachment,
-      notices,
     ) as Attachment;
     const outcome = handle(attachment.subscriptions, message);
     if (outcome.next !== null) {
@@ -222,11 +268,20 @@ export class Relay extends DurableObject {
       } catch {
         // The attachment refused the new list: nothing was stored.
         ws.send(JSON.stringify(limit(outcome.reply.id)));
-        for (const send of notices) send();
         return;
       }
       if (attachment.id !== undefined) {
-        retain(this.ctx.storage.kv, attachment.id, outcome.next, thisMinute());
+        try {
+          retain(
+            this.ctx.storage.kv,
+            attachment.id,
+            outcome.next,
+            thisMinute(),
+          );
+        } catch (error) {
+          // Stale counts are harmless; the reply must go out.
+          console.error("delivery counts could not be trimmed", error);
+        }
       }
     }
     if ("echo" in outcome) {
@@ -258,7 +313,6 @@ export class Relay extends DurableObject {
           : reply,
       ),
     );
-    for (const send of notices) send();
   }
 
   /**
@@ -282,7 +336,7 @@ export class Relay extends DurableObject {
       );
       if (matched.length === 0) continue;
       const id = screened.id ?? crypto.randomUUID();
-      const { within, tripped } = this.count(
+      const { within, tripped, counted } = this.count(
         id,
         matched,
         minute,
@@ -290,20 +344,14 @@ export class Relay extends DurableObject {
       );
       if (tripped.length > 0 || screened.id === undefined) {
         socket.serializeAttachment({
+          ...screened,
           subscriptions: screened.subscriptions.filter(
             (s) => !tripped.includes(s),
           ),
           id,
         } satisfies Attachment);
       }
-      for (const subscription of tripped) {
-        notice(
-          socket,
-          subscription,
-          "rate_cap",
-          `removed: it matched more than ${String(CAP_EVENTS)} events in ${String(CAP_MINUTES)} minutes; subscribe again with narrower filters such as name, conclusion or action`,
-        );
-      }
+      announceCap(socket, tripped);
       if (within.length === 0) continue;
       // One socket that fails mid-close mustn't stop the others from
       // receiving the event, or fail the webhook.
@@ -311,8 +359,9 @@ export class Relay extends DurableObject {
         socket.send(message);
         reached += 1;
       } catch {
-        // Not reached, so not counted.
-        this.uncount(id, within, minute);
+        // Not reached, so not counted. An event that was never charged has
+        // nothing to take back.
+        if (counted) this.uncount(id, within, minute);
       }
     }
     return reached;
@@ -326,12 +375,15 @@ export class Relay extends DurableObject {
     matched: readonly Subscription[],
     minute: number,
     live: readonly Subscription[],
-  ): { within: Subscription[]; tripped: Subscription[] } {
+  ): { within: Subscription[]; tripped: Subscription[]; counted: boolean } {
     try {
-      return charge(this.ctx.storage.kv, id, matched, minute, live);
+      return {
+        ...charge(this.ctx.storage.kv, id, matched, minute, live),
+        counted: true,
+      };
     } catch (error) {
       console.error("delivery counts could not be stored", error);
-      return { within: [...matched], tripped: [] };
+      return { within: [...matched], tripped: [], counted: false };
     }
   }
 
