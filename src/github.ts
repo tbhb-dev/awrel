@@ -41,6 +41,7 @@ export const MAX_BODY_BYTES = 25 * 1024 * 1024;
 // to the cap, so the Worker never buffers more than the cap.
 async function cappedBody(request: Request): Promise<ArrayBuffer | null> {
   const declared = Number(request.headers.get("Content-Length"));
+  // A non-numeric length is NaN, which fails this comparison and gets 413.
   if (!(declared <= MAX_BODY_BYTES)) {
     return null;
   }
