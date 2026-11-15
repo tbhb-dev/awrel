@@ -41,6 +41,7 @@ jobs:
     # macOS gets 75 minutes: on a cold cache its tests alone took 38
     # minutes, and the release build still has to run after them.
     timeout-minutes: ${{ matrix.os == 'macos-26' && 75 || 45 }}
+    environment: ${{ github.event_name == 'push' && 'cache' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -79,8 +80,22 @@ jobs:
       - name: Set up Bazel for CI
         uses: tbhb-dev/rules/.github/actions/setup-bazel-ci@b6f375a670601f5e505138c7ee86f9e259149c65  # main
         with:
-          disk-cache: ${{ github.workflow }}-${{ matrix.os }}
+          disk-cache: >-
+            ${{ github.event_name == 'push' && matrix.os != 'windows-2025' && 'false' ||
+            format('{0}-{1}', github.workflow, matrix.os) }}
           cache-save: ${{ github.event_name != 'pull_request' }}
+
+      # Use awrel's remote cache. A fork's pull request gets no secrets and
+      # builds without the cache. Windows keeps its disk cache because Bazel
+      # cannot run the action's #!/bin/sh credential helper there.
+      - name: Use the remote cache
+        if: matrix.os != 'windows-2025'
+        uses: tbhb-dev/bazel-r2-cache/.github/actions/remote-cache@7b7c1c129366cc6ea7d1817f7b2d82df6550162c  # main
+        with:
+          token: >-
+            ${{ github.event_name == 'push' && secrets.BAZEL_CACHE_TOKEN ||
+            github.event_name == 'pull_request' && secrets.BAZEL_CACHE_PR_TOKEN || '' }}
+          pull-request: ${{ github.event.pull_request.number }}
 
       # //... is every hermetic gate: the whole-tree lint tests (secrets in
       # the working tree, YAML, TOML, Markdown, prose, EditorConfig,
@@ -92,9 +107,28 @@ jobs:
       - name: Test
         env:
           FILTERS: ${{ matrix.filters }}
+          EVENT_NAME: ${{ github.event_name }}
         # FILTERS is either empty or a list of flags, split into words.
         run: |
           read -ra filters <<<"${FILTERS}"
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            # Merge filters: Bazel uses the last flag; Go mutation reports are build actions.
+            build_tags=-mutation
+            test_tags=-mutation
+            for i in "${!filters[@]}"; do
+              case "${filters[i]}" in
+                --build_tag_filters=*)
+                  build_tags="${filters[i]#*=},${build_tags}"
+                  unset 'filters[i]'
+                  ;;
+                --test_tag_filters=*)
+                  test_tags="${filters[i]#*=},${test_tags}"
+                  unset 'filters[i]'
+                  ;;
+              esac
+            done
+            filters+=("--build_tag_filters=${build_tags}" "--test_tag_filters=${test_tags}")
+          fi
           bazelisk test --config=ci "${filters[@]}" //...
 
       # Keep passing timings visible too; failed sessions also print stacks.
