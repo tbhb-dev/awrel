@@ -37,6 +37,9 @@ const (
 	requestSubscribe   = "subscribe"
 	requestUnsubscribe = "unsubscribe"
 	maxMessageBytes    = 4096
+	// The relay's own notice event.
+	awrelProvider = "awrel"
+	noticeEvent   = "notice"
 )
 
 var (
@@ -631,7 +634,7 @@ func (c *Client) handle(ctx context.Context, msg protocol.Message) bool {
 // which tells the session that a subscription is gone and matches no filter.
 // An incompatible relay shuts it for every event.
 func (c *Client) handleEvent(ctx context.Context, message protocol.Event) {
-	notice := message.Provider == "awrel" && message.Event == "notice"
+	notice := message.Provider == awrelProvider && message.Event == noticeEvent
 
 	if !c.incompatible.Load() && (c.gated.Load() == 0 || notice) {
 		c.opts.OnEvent(ctx, message)
