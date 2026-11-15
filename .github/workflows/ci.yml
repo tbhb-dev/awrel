@@ -77,7 +77,7 @@ jobs:
       # Hardening (Linux), Bazel and its caches, Windows' Bash, output root
       # and long paths, Linux arm64's Rust, and the retried fetch of //...
       - name: Set up Bazel for CI
-        uses: tbhb-dev/rules/.github/actions/setup-bazel-ci@ee2995544501ca1baa6f2d091541b759b9ce55ea  # main
+        uses: tbhb-dev/rules/.github/actions/setup-bazel-ci@b6f375a670601f5e505138c7ee86f9e259149c65  # main
         with:
           disk-cache: ${{ github.workflow }}-${{ matrix.os }}
           cache-save: ${{ github.event_name != 'pull_request' }}
@@ -134,7 +134,7 @@ jobs:
     name: repo
     permissions:
       contents: read
-    uses: tbhb-dev/rules/.github/workflows/repo-checks.yml@ee2995544501ca1baa6f2d091541b759b9ce55ea  # main
+    uses: tbhb-dev/rules/.github/workflows/repo-checks.yml@b6f375a670601f5e505138c7ee86f9e259149c65  # main
     with:
       timeout-minutes: 10
       pip-audit-target: //tools:pip_audit
@@ -156,6 +156,6 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Fail if any needed job did not succeed
-        uses: tbhb-dev/rules/.github/actions/ci-conclusion@ee2995544501ca1baa6f2d091541b759b9ce55ea  # main
+        uses: tbhb-dev/rules/.github/actions/ci-conclusion@b6f375a670601f5e505138c7ee86f9e259149c65  # main
         with:
           needs: ${{ toJSON(needs) }}
