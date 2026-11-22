@@ -2,12 +2,12 @@
 description: Deploy the Worker and Durable Object, create the GitHub App, and point the awrel server at your own relay.
 generated:
   - role: generated
-    harness: claude-code:2.1.322
-    model: anthropic:claude-sonnet-5-5
+    harness: codex:0.171.0
+    model: openai:gpt-6.1-sol
     effort: medium
-    surface: cli
-    session: sha-256-64:dc0c7bb9a6fc4839
-    at: "2026-11-12T22:31:30Z"
+    surface: exec
+    session: sha-256-64:846b81e037eff567
+    at: "2026-11-22T03:38:30Z"
 status: stable
 tags: [docs, self-host, deploy]
 title: Self-host a relay
@@ -41,21 +41,23 @@ Deploy with `npx wrangler deploy`.
 
 ## Set the secrets
 
-The Worker reads two secrets and nothing else:
+The Worker reads three secrets and nothing else:
 
 | Secret | Use |
 | --- | --- |
 | `GITHUB_WEBHOOK_SECRET` | The secret that signs each webhook delivery. The Worker answers 401 to a delivery whose `X-Hub-Signature-256` header doesn't match. |
+| `GRAFANA_WEBHOOK_SECRET` | The secret that signs each Grafana alert delivery. The Worker answers 503 when it's empty and 401 to a delivery whose signature doesn't check out. |
 | `CONNECT_TOKEN` | The bearer token that `awrel mcp` presents on `/connect`. |
 
 Pick a long random value for each, and keep them out of version control:
 
 ```sh
 npx wrangler secret put GITHUB_WEBHOOK_SECRET
+npx wrangler secret put GRAFANA_WEBHOOK_SECRET
 npx wrangler secret put CONNECT_TOKEN
 ```
 
-Wrangler prompts for each value. Give `GITHUB_WEBHOOK_SECRET` the same value you enter in the GitHub App below.
+Wrangler prompts for each value. Give `GITHUB_WEBHOOK_SECRET` the same value you enter in the GitHub App below, and `GRAFANA_WEBHOOK_SECRET` the same value you enter in the Grafana contact point.
 
 ## Create the GitHub app
 
@@ -69,6 +71,19 @@ In your GitHub account or organization settings, create a GitHub App with these 
 The Worker relays whatever events the App sends. It answers a `ping` event without relaying it. Agents choose an event type and repository with each `subscribe` call: `{"provider":"github","event":"pull_request","repository":"owner/name"}`.
 
 Deploy a relay with subscription filter support before using filtered tools. The client probes support on every connection and refuses incompatible relays. The [subscription filter examples](../../README.md#subscription-filters) cover completed check failures, exact check names, workflow paths, and removal. Filters narrow the events the App already sends.
+
+## Create the Grafana contact point
+
+Skip this section if you don't relay Grafana alerts. In Grafana, add a webhook contact point with these settings:
+
+- URL: `https://relay.example.com/webhooks/grafana`, with your relay host.
+- HTTP method: `POST`.
+- Optional settings, the signature secret field: the value of `GRAFANA_WEBHOOK_SECRET`.
+- Leave the optional Timestamp Header field empty.
+
+Grafana signs the raw body with HMAC-SHA256 and sends the 64-digit hexadecimal signature in `X-Grafana-Alerting-Signature`. The contact point needs no timestamp header. The Worker verifies the signature before parsing the body.
+
+An alert becomes an event when its status is `firing` or `resolved` and it has a valid scope label. The Worker checks `host_name` first for `hosts/<value>`, then `agent_account` for `capacity/<value>`, and uses the first value matching 1 to 100 letters, digits, dots, hyphens, or underscores. Alerts with no matching label are skipped. Agents subscribe with `{"provider":"grafana","event":"alert.firing","repository":"hosts/<host_name>"}` or `{"provider":"grafana","event":"alert.firing","repository":"capacity/<agent_account>"}`.
 
 ## Install the app
 
