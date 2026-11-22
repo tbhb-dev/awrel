@@ -2,7 +2,7 @@
 // Copyright Tony Burns
 
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { limit, type Subscription } from "./protocol.ts";
 import type { RelayEvent } from "./relay.ts";
 import {
@@ -764,5 +764,74 @@ it("echoes only to the requesting socket, before acknowledging, without matching
   expect(await exchange(client, list)).toStrictEqual(subscriptions("l", []));
   expect(await exchange(other, list)).toStrictEqual(
     subscriptions("l", [{ provider: "awrel" }]),
+  );
+});
+
+it("logs a connection and a stored subscription list", async () => {
+  const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  try {
+    const client = await dial();
+    await exchange(
+      client,
+      subscribe("s", {
+        provider: "github",
+        event: "push",
+        repository: "owner/repo",
+      }),
+    );
+    const lines = log.mock.calls.map((call) => String(call[0]));
+    expect(lines).toContain("relay connect sockets=1");
+    expect(lines).toContain("relay subscriptions sockets=1 subscriptions=1");
+  } finally {
+    log.mockRestore();
+  }
+});
+
+// Runs `action` with console.log spied and returns the lines it logged.
+async function logged(action: () => Promise<unknown>): Promise<string[]> {
+  const spy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  try {
+    await action();
+    return spy.mock.calls.map((call) => String(call[0]));
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+it("logs a publish with no sockets", async () => {
+  const lines = await logged(() => relay().publish(EVENT));
+  expect(lines).toContain(
+    "relay publish provider=github event=push sockets=0 matched=0 reached=0",
+  );
+});
+
+it("logs a publish that no subscription matched", async () => {
+  await connect(relay(), { subscriptions: [{ provider: "gitlab" }] });
+  const lines = await logged(() => relay().publish(EVENT));
+  expect(lines).toContain(
+    "relay publish provider=github event=push sockets=1 matched=0 reached=0",
+  );
+});
+
+it("logs a publish whose send failed as matched but not reached", async () => {
+  const broken = {
+    deserializeAttachment: () => ({ subscriptions: [{ provider: "github" }] }),
+    send: () => {
+      throw new Error("closing");
+    },
+  } as unknown as WebSocket;
+  const lines = await logged(() =>
+    runInDurableObject(relay(), (instance, state) => {
+      const original = state.getWebSockets.bind(state);
+      state.getWebSockets = () => [broken];
+      try {
+        return instance.publish(EVENT);
+      } finally {
+        state.getWebSockets = original;
+      }
+    }),
+  );
+  expect(lines).toContain(
+    "relay publish provider=github event=push sockets=1 matched=1 reached=0",
   );
 });

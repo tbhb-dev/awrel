@@ -2,6 +2,7 @@
 // Copyright Tony Burns
 
 import { DurableObject } from "cloudflare:workers";
+import { log } from "./log.ts";
 import { handle, limit, type Subscription } from "./protocol.ts";
 
 /** A webhook event, as the relay hands it to subscribed connections. */
@@ -85,6 +86,7 @@ export class Relay extends DurableObject {
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
     pair[1].serializeAttachment({ subscriptions: [] } satisfies Attachment);
+    log(`relay connect sockets=${String(this.ctx.getWebSockets().length)}`);
     return new Response(null, {
       status: 101,
       webSocket: pair[0],
@@ -109,6 +111,9 @@ export class Relay extends DurableObject {
         ws.send(JSON.stringify(limit(outcome.reply.id)));
         return;
       }
+      log(
+        `relay subscriptions sockets=${String(this.ctx.getWebSockets().length)} subscriptions=${String(outcome.next.length)}`,
+      );
     }
     if ("echo" in outcome) {
       ws.send(
@@ -133,13 +138,16 @@ export class Relay extends DurableObject {
   publish(event: RelayEvent): number {
     const message = eventFrame(event);
     const fields = filterFields(event);
+    const sockets = this.ctx.getWebSockets();
+    let matched = 0;
     let reached = 0;
-    for (const socket of this.ctx.getWebSockets()) {
+    for (const socket of sockets) {
       const attachment = socket.deserializeAttachment() as Attachment | null;
       if (
         attachment?.subscriptions.some((s) => matches(s, event, fields)) ===
         true
       ) {
+        matched += 1;
         // One socket that fails mid-close mustn't stop the others from
         // receiving the event, or fail the webhook.
         try {
@@ -150,6 +158,9 @@ export class Relay extends DurableObject {
         }
       }
     }
+    log(
+      `relay publish provider=${event.provider} event=${event.event} sockets=${String(sockets.length)} matched=${String(matched)} reached=${String(reached)}`,
+    );
     return reached;
   }
 }

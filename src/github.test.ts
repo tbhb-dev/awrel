@@ -384,3 +384,40 @@ describe("secret", () => {
     },
   );
 });
+
+describe("delivery log", () => {
+  async function logged(delivery: Delivery): Promise<string[]> {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      expect((await post(delivery)).status).toBe(202);
+      return log.mock.calls.map((call) => String(call[0]));
+    } finally {
+      log.mockRestore();
+    }
+  }
+
+  it("logs the delivery, action, repository and reach", async () => {
+    await connect(relay(), { subscriptions: [{ provider: "github" }] });
+    const lines = await logged({
+      body: '{"action":"opened","repository":{"full_name":"Owner/Repo"}}',
+      event: "pull_request",
+    });
+    expect(lines).toContain(
+      "github delivery=d-1 event=pull_request action=opened repository=Owner/Repo reached=1",
+    );
+  });
+
+  it("logs none for a missing repository and a non-string action", async () => {
+    const lines = await logged({ body: '{"action":1}' });
+    expect(lines).toContain(
+      "github delivery=d-1 event=push action=none repository=none reached=0",
+    );
+  });
+
+  it("logs none for a null payload", async () => {
+    const lines = await logged({ body: "null" });
+    expect(lines).toContain(
+      "github delivery=d-1 event=push action=none repository=none reached=0",
+    );
+  });
+});
