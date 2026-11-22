@@ -411,13 +411,16 @@ worker_types_test(
 WORKER_SECRETS = {
     "CONNECT_TOKEN": "CONNECT_TOKEN",
     "GITHUB_WEBHOOK_SECRET": "GITHUB_WEBHOOK_SECRET",
-    "GRAFANA_WEBHOOK_SECRET": "GRAFANA_WEBHOOK_SECRET",
 }
+
+# The Grafana route answers 503 until the secret exists.
+WORKER_OPTIONAL_SECRETS = {"GRAFANA_WEBHOOK_SECRET": "GRAFANA_WEBHOOK_SECRET"}
 
 worker_deploy(
     name = "deploy_stg",
     srcs = WORKER,
     env = "stg",
+    optional_secrets = WORKER_OPTIONAL_SECRETS,
     pass_env = [
         "CONNECT_TOKEN",
         "GITHUB_WEBHOOK_SECRET",
@@ -434,6 +437,7 @@ worker_deploy(
     name = "deploy_prd",
     srcs = WORKER,
     env = "prd",
+    optional_secrets = WORKER_OPTIONAL_SECRETS,
     pass_env = [
         "CONNECT_TOKEN",
         "GITHUB_WEBHOOK_SECRET",

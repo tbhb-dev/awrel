@@ -2,12 +2,12 @@
 description: Deploy the Worker and Durable Object, create the GitHub App, and point the awrel server at your own relay.
 generated:
   - role: generated
-    harness: codex:0.171.0
-    model: openai:gpt-6.1-sol
+    harness: claude-code:2.1.322
+    model: anthropic:claude-sonnet-5-5
     effort: medium
-    surface: exec
-    session: sha-256-64:846b81e037eff567
-    at: "2026-11-22T03:38:30Z"
+    surface: cli
+    session: sha-256-64:dc0c7bb9a6fc4839
+    at: "2026-11-22T09:49:58Z"
 status: stable
 tags: [docs, self-host, deploy]
 title: Self-host a relay
@@ -49,7 +49,7 @@ The Worker reads three secrets and nothing else:
 | `GRAFANA_WEBHOOK_SECRET` | The secret that signs each Grafana alert delivery. The Worker answers 503 when it's empty and 401 to a delivery whose signature doesn't check out. |
 | `CONNECT_TOKEN` | The bearer token that `awrel mcp` presents on `/connect`. |
 
-Pick a long random value for each, and keep them out of version control:
+Pick long random values for the secrets, and keep them out of version control. `GRAFANA_WEBHOOK_SECRET` is optional: Bazel deploys warn and skip it when unset.
 
 ```sh
 npx wrangler secret put GITHUB_WEBHOOK_SECRET
