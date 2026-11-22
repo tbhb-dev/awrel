@@ -2,7 +2,7 @@
 // Copyright Tony Burns
 
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { limit, type Subscription } from "./protocol.ts";
 import type { RelayEvent } from "./relay.ts";
 import {
@@ -765,4 +765,24 @@ it("echoes only to the requesting socket, before acknowledging, without matching
   expect(await exchange(other, list)).toStrictEqual(
     subscriptions("l", [{ provider: "awrel" }]),
   );
+});
+
+it("logs a connection and a stored subscription list", async () => {
+  const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  try {
+    const client = await dial();
+    await exchange(
+      client,
+      subscribe("s", {
+        provider: "github",
+        event: "push",
+        repository: "owner/repo",
+      }),
+    );
+    const lines = log.mock.calls.map((call) => String(call[0]));
+    expect(lines).toContain("relay connect sockets=1");
+    expect(lines).toContain("relay subscriptions sockets=1 subscriptions=1");
+  } finally {
+    log.mockRestore();
+  }
 });

@@ -116,12 +116,17 @@ export async function receiveGitHub(
   if (event === "ping") {
     return new Response(null, { status: 202 });
   }
-  await env.RELAY.getByName("default").publish({
+  const repository = repositoryOf(payload);
+  const reached = await env.RELAY.getByName("default").publish({
     provider: "github",
     event,
     delivery,
-    repository: repositoryOf(payload),
+    repository,
     payload,
   });
+  const action = (payload as { action?: unknown } | null)?.action;
+  console.log(
+    `github delivery=${delivery} event=${event} action=${typeof action === "string" ? action : "none"} repository=${repository ?? "none"} reached=${String(reached)}`,
+  );
   return new Response(null, { status: 202 });
 }
