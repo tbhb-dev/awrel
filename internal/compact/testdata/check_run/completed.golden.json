@@ -8,7 +8,8 @@
     "status": "completed",
     "conclusion": "failure",
     "check_suite": {
-      "id": 999999999998
+      "id": 999999999998,
+      "head_branch": "feat/compact-mcp"
     },
     "app": {
       "slug": "github-actions"

@@ -156,7 +156,8 @@ var keepLists = map[string]*keepList{
 	"check_run": newKeepList(
 		nil,
 		"check_run.id", "check_run.name", "check_run.status", "check_run.conclusion", "check_run.head_sha",
-		"check_run.html_url", "check_run.app.slug", "check_run.check_suite.id", "check_run.pull_requests.number",
+		"check_run.html_url", "check_run.app.slug",
+		"check_run.check_suite.id", "check_run.check_suite.head_branch", "check_run.pull_requests.number",
 	),
 	"workflow_run": newKeepList(nil, append(workflowFields("workflow_run"), "workflow_run.path")...),
 	"workflow_job": newKeepList(nil, workflowFields("workflow_job")...),
