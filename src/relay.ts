@@ -86,9 +86,7 @@ export class Relay extends DurableObject {
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
     pair[1].serializeAttachment({ subscriptions: [] } satisfies Attachment);
-    log(
-      `relay connect sockets=${String(this.ctx.getWebSockets().length)}`,
-    );
+    log(`relay connect sockets=${String(this.ctx.getWebSockets().length)}`);
     return new Response(null, {
       status: 101,
       webSocket: pair[0],
