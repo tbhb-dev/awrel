@@ -724,10 +724,10 @@ func TestKeepListChecks(t *testing.T) {
 			"check_run",
 			"check_run",
 			`{"check_run":{"id":1,"name":"n","status":"s","conclusion":"c","head_sha":"h","html_url":"u",` +
-				`"app":{"slug":"a","id":1},"check_suite":{"id":2,"head_sha":"x"},` +
+				`"app":{"slug":"a","id":1},"check_suite":{"id":2,"head_branch":"main","head_sha":"x"},` +
 				`"pull_requests":[{"number":3,"url":"u","head":{}}],"output":{}}}`,
 			`{"check_run":{"id":1,"name":"n","status":"s","conclusion":"c","head_sha":"h","html_url":"u",` +
-				`"app":{"slug":"a"},"check_suite":{"id":2},"pull_requests":[{"number":3}]}}`,
+				`"app":{"slug":"a"},"check_suite":{"id":2,"head_branch":"main"},"pull_requests":[{"number":3}]}}`,
 		},
 		{
 			"check_suite",

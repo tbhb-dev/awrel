@@ -8,7 +8,8 @@
     "status": "queued",
     "conclusion": null,
     "check_suite": {
-      "id": 999999999941
+      "id": 999999999941,
+      "head_branch": "feat/compact-mcp"
     },
     "app": {
       "slug": "github-actions"
