@@ -2,6 +2,7 @@
 // Copyright Tony Burns
 
 import type { Env } from "./env.ts";
+import { log } from "./log.ts";
 
 // Whether `header` is the HMAC-SHA256 of `body` under `secret`, in GitHub's
 // `sha256=<hex>` form. The check is Web Crypto's verify, which compares in
@@ -125,7 +126,7 @@ export async function receiveGitHub(
     payload,
   });
   const action = (payload as { action?: unknown } | null)?.action;
-  console.log(
+  log(
     `github delivery=${delivery} event=${event} action=${typeof action === "string" ? action : "none"} repository=${repository ?? "none"} reached=${String(reached)}`,
   );
   return new Response(null, { status: 202 });
