@@ -131,6 +131,36 @@ export class Relay extends DurableObject {
     ws.send(JSON.stringify(outcome.reply));
   }
 
+  /** Logs why a connection closed, then closes the server side to match. */
+  override webSocketClose(
+    ws: WebSocket,
+    code: number,
+    reason: string,
+    wasClean: boolean,
+  ): void {
+    log(
+      `relay close code=${String(code)} clean=${String(wasClean)} reason=${JSON.stringify(reason.slice(0, 64))} sockets=${String(this.others(ws))}`,
+    );
+    try {
+      // Codes 1005 and 1006 are reserved: close() throws on them.
+      ws.close(code === 1005 || code === 1006 ? 1000 : code, reason);
+    } catch {
+      // Closing an already closed socket throws and there is nothing left to do.
+    }
+  }
+
+  /** Logs a connection error. */
+  override webSocketError(ws: WebSocket, error: unknown): void {
+    log(
+      `relay error message=${JSON.stringify(String(error instanceof Error ? error.message : error).slice(0, 64))} sockets=${String(this.others(ws))}`,
+    );
+  }
+
+  /** Counts the connections other than the one that is closing or failed. */
+  private others(ws: WebSocket): number {
+    return this.ctx.getWebSockets().filter((other) => other !== ws).length;
+  }
+
   /**
    * Sends the event to every connection with a matching subscription, and
    * returns how many connections it reached.

@@ -4,7 +4,7 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { afterEach, expect, it, vi } from "vitest";
 import { limit, type Subscription } from "./protocol.ts";
-import type { RelayEvent } from "./relay.ts";
+import type { Relay, RelayEvent } from "./relay.ts";
 import {
   connect,
   dial,
@@ -834,4 +834,102 @@ it("logs a publish whose send failed as matched but not reached", async () => {
   expect(lines).toContain(
     "relay publish provider=github event=push sockets=1 matched=1 reached=0",
   );
+});
+
+// Runs a close or error handler on a fake socket and returns what it logged
+// and which close calls reached the socket.
+async function closing(
+  run: (instance: Relay, socket: WebSocket) => void,
+  closeThrows = false,
+): Promise<{ lines: string[]; closed: unknown[][] }> {
+  const closed: unknown[][] = [];
+  const socket = {
+    close: (...args: unknown[]) => {
+      closed.push(args);
+      if (closeThrows) {
+        throw new Error("already closed");
+      }
+    },
+  } as unknown as WebSocket;
+  const lines = await logged(() =>
+    runInDurableObject(relay(), (instance) => {
+      run(instance, socket);
+    }),
+  );
+  return { lines, closed };
+}
+
+it("logs a clean close and closes the server side with the same code", async () => {
+  const { lines, closed } = await closing((instance, socket) => {
+    instance.webSocketClose(socket, 1000, "bye", true);
+  });
+  expect(lines).toContain(
+    'relay close code=1000 clean=true reason="bye" sockets=0',
+  );
+  expect(closed).toStrictEqual([[1000, "bye"]]);
+});
+
+it("closes with 1000 when the client code is reserved", async () => {
+  const { lines, closed } = await closing((instance, socket) => {
+    instance.webSocketClose(socket, 1006, "", false);
+    instance.webSocketClose(socket, 1005, "", true);
+  });
+  expect(lines).toContain(
+    'relay close code=1006 clean=false reason="" sockets=0',
+  );
+  expect(lines).toContain(
+    'relay close code=1005 clean=true reason="" sockets=0',
+  );
+  expect(closed).toStrictEqual([
+    [1000, ""],
+    [1000, ""],
+  ]);
+});
+
+it("cuts a long close reason to 64 characters in the log", async () => {
+  const { lines } = await closing((instance, socket) => {
+    instance.webSocketClose(socket, 1001, "x".repeat(100), true);
+  });
+  expect(lines).toContain(
+    `relay close code=1001 clean=true reason="${"x".repeat(64)}" sockets=0`,
+  );
+});
+
+it("ignores a close that throws on an already closed socket", async () => {
+  const { lines, closed } = await closing((instance, socket) => {
+    instance.webSocketClose(socket, 1001, "gone", true);
+  }, true);
+  expect(lines).toContain(
+    'relay close code=1001 clean=true reason="gone" sockets=0',
+  );
+  expect(closed).toStrictEqual([[1001, "gone"]]);
+});
+
+it("logs an error message from an Error and from another value", async () => {
+  const { lines, closed } = await closing((instance, socket) => {
+    instance.webSocketError(socket, new Error("boom"));
+    instance.webSocketError(socket, "y".repeat(100));
+  });
+  expect(lines).toContain('relay error message="boom" sockets=0');
+  expect(lines).toContain(`relay error message="${"y".repeat(64)}" sockets=0`);
+  expect(closed).toStrictEqual([]);
+});
+
+it("excludes the closing socket from the logged count", async () => {
+  const other = { close: () => undefined } as unknown as WebSocket;
+  const { lines } = await closing((instance, socket) => {
+    const state = (instance as unknown as { ctx: DurableObjectState }).ctx;
+    const original = state.getWebSockets.bind(state);
+    state.getWebSockets = () => [socket, other];
+    try {
+      instance.webSocketClose(socket, 1000, "bye", true);
+      instance.webSocketError(socket, "boom");
+    } finally {
+      state.getWebSockets = original;
+    }
+  });
+  expect(lines).toContain(
+    'relay close code=1000 clean=true reason="bye" sockets=1',
+  );
+  expect(lines).toContain('relay error message="boom" sockets=1');
 });
