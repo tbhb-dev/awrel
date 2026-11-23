@@ -914,3 +914,22 @@ it("logs an error message from an Error and from another value", async () => {
   expect(lines).toContain(`relay error message="${"y".repeat(64)}" sockets=0`);
   expect(closed).toStrictEqual([]);
 });
+
+it("excludes the closing socket from the logged count", async () => {
+  const other = { close: () => undefined } as unknown as WebSocket;
+  const { lines } = await closing((instance, socket) => {
+    const state = (instance as unknown as { ctx: DurableObjectState }).ctx;
+    const original = state.getWebSockets.bind(state);
+    state.getWebSockets = () => [socket, other];
+    try {
+      instance.webSocketClose(socket, 1000, "bye", true);
+      instance.webSocketError(socket, "boom");
+    } finally {
+      state.getWebSockets = original;
+    }
+  });
+  expect(lines).toContain(
+    'relay close code=1000 clean=true reason="bye" sockets=1',
+  );
+  expect(lines).toContain('relay error message="boom" sockets=1');
+});

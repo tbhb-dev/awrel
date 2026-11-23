@@ -139,7 +139,7 @@ export class Relay extends DurableObject {
     wasClean: boolean,
   ): void {
     log(
-      `relay close code=${String(code)} clean=${String(wasClean)} reason=${JSON.stringify(reason.slice(0, 64))} sockets=${String(this.ctx.getWebSockets().length)}`,
+      `relay close code=${String(code)} clean=${String(wasClean)} reason=${JSON.stringify(reason.slice(0, 64))} sockets=${String(this.others(ws))}`,
     );
     try {
       // Codes 1005 and 1006 are reserved: close() throws on them.
@@ -150,10 +150,15 @@ export class Relay extends DurableObject {
   }
 
   /** Logs a connection error. */
-  override webSocketError(_ws: WebSocket, error: unknown): void {
+  override webSocketError(ws: WebSocket, error: unknown): void {
     log(
-      `relay error message=${JSON.stringify(String(error instanceof Error ? error.message : error).slice(0, 64))} sockets=${String(this.ctx.getWebSockets().length)}`,
+      `relay error message=${JSON.stringify(String(error instanceof Error ? error.message : error).slice(0, 64))} sockets=${String(this.others(ws))}`,
     );
+  }
+
+  /** Counts the connections other than the one that is closing or failed. */
+  private others(ws: WebSocket): number {
+    return this.ctx.getWebSockets().filter((other) => other !== ws).length;
   }
 
   /**
