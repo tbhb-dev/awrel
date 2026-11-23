@@ -22,6 +22,19 @@ function eventFrame(
 }
 
 /**
+ * Quotes client-supplied text for a log line: cuts it to 64 characters
+ * without splitting a surrogate pair, and escapes every character that a log
+ * reader could treat as a line break. JSON.stringify escapes the control
+ * characters but leaves U+0085, U+2028 and U+2029 as they are.
+ */
+function quoted(text: string): string {
+  return JSON.stringify(Array.from(text).slice(0, 64).join("")).replace(
+    /[\u0085\u2028\u2029]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/**
  * A connection's WebSocket attachment. It is stored with the socket, so the
  * subscriptions survive the Durable Object hibernating.
  */
@@ -139,7 +152,7 @@ export class Relay extends DurableObject {
     wasClean: boolean,
   ): void {
     log(
-      `relay close code=${String(code)} clean=${String(wasClean)} reason=${JSON.stringify(reason.slice(0, 64))} sockets=${String(this.others(ws))}`,
+      `relay close code=${String(code)} clean=${String(wasClean)} reason=${quoted(reason)} sockets=${String(this.others(ws))}`,
     );
     try {
       // Codes 1005 and 1006 are reserved: close() throws on them.
@@ -152,7 +165,7 @@ export class Relay extends DurableObject {
   /** Logs a connection error. */
   override webSocketError(ws: WebSocket, error: unknown): void {
     log(
-      `relay error message=${JSON.stringify(String(error instanceof Error ? error.message : error).slice(0, 64))} sockets=${String(this.others(ws))}`,
+      `relay error message=${quoted(String(error instanceof Error ? error.message : error))} sockets=${String(this.others(ws))}`,
     );
   }
 

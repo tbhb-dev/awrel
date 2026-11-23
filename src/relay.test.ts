@@ -895,6 +895,39 @@ it("cuts a long close reason to 64 characters in the log", async () => {
   );
 });
 
+it("cuts a close reason by character, not inside a surrogate pair", async () => {
+  const { lines } = await closing((instance, socket) => {
+    instance.webSocketClose(socket, 1001, `${"x".repeat(63)}😀😀`, true);
+  });
+  expect(lines).toContain(
+    `relay close code=1001 clean=true reason="${"x".repeat(63)}😀" sockets=0`,
+  );
+});
+
+it("escapes the separators that JSON.stringify leaves in a log line", async () => {
+  const { lines } = await closing((instance, socket) => {
+    instance.webSocketClose(socket, 1001, "a\u0085b\u2028c\u2029d", true);
+    instance.webSocketError(socket, "e\u0085f\u2028g\u2029h");
+  });
+  expect(lines).toContain(
+    'relay close code=1001 clean=true reason="a\\u0085b\\u2028c\\u2029d" sockets=0',
+  );
+  expect(lines).toContain(
+    'relay error message="e\\u0085f\\u2028g\\u2029h" sockets=0',
+  );
+});
+
+it("logs the close of a connection made through the Worker", async () => {
+  const client = await dial();
+  const lines = await logged(async () => {
+    client.socket.close(1001, "going away");
+    await settle();
+  });
+  expect(lines).toContain(
+    'relay close code=1001 clean=true reason="going away" sockets=0',
+  );
+});
+
 it("ignores a close that throws on an already closed socket", async () => {
   const { lines, closed } = await closing((instance, socket) => {
     instance.webSocketClose(socket, 1001, "gone", true);
