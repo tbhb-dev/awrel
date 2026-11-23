@@ -8,9 +8,9 @@
 # GitHub API run as their own steps after it. A final `conclusion` job gives
 # branch protection one stable required check.
 #
-# Pull requests run Linux (x86_64 and arm64) and Windows. Pushes to main,
-# nightly runs and reusable calls also run macOS (arm64). On main, the
-# deploy workflow calls these jobs before it deploys.
+# Pull requests, pushes to main, nightly runs and reusable calls all run
+# Linux (x86_64 and arm64), macOS (arm64) and Windows. On main, the deploy
+# workflow calls these jobs before it deploys.
 name: ci
 
 on:
@@ -45,10 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: >-
-          ${{ fromJSON(github.event_name == 'pull_request' &&
-          '["ubuntu-26.04","ubuntu-26.04-arm","windows-2025"]' ||
-          '["ubuntu-26.04","ubuntu-26.04-arm","macos-26","windows-2025"]') }}
+        os: [ubuntu-26.04, ubuntu-26.04-arm, macos-26, windows-2025]
         include:
           # Defaults merge into existing legs without adding an OS.
           - release: release
