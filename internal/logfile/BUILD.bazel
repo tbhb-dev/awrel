@@ -8,7 +8,11 @@ repo_files()
 
 go_library(
     name = "logfile",
-    srcs = ["logfile.go"],
+    srcs = [
+        "logfile.go",
+        "nofollow_other.go",
+        "nofollow_unix.go",
+    ],
     importpath = "go.tbhb.dev/awrel/internal/logfile",
     visibility = ["//:__subpackages__"],
     deps = ["//internal/persist"],
@@ -16,7 +20,10 @@ go_library(
 
 go_test(
     name = "logfile_test",
-    srcs = ["logfile_internal_test.go"],
+    srcs = [
+        "logfile_internal_test.go",
+        "nofollow_unix_internal_test.go",
+    ],
     args = ["-test.v"],
     embed = [":logfile"],
     visibility = ["//:__pkg__"],

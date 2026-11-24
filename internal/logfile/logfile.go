@@ -96,7 +96,7 @@ func open(path string, stderr io.Writer, logger *slog.Logger, now time.Time) (*w
 }
 
 func appendFile(path string, openFile func(string, int, fs.FileMode) (*os.File, error)) (*os.File, int64, error) {
-	file, err := openFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fileMode)
+	file, err := openFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|noFollow, fileMode)
 	if err != nil {
 		return nil, 0, fmt.Errorf("open log file: %w", err)
 	}
