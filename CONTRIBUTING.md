@@ -20,6 +20,6 @@ This section describes the maintainers' own tooling. You don't need it to contri
 
 ## Maintainer configuration
 
-`.mcp.json` is the maintainers' own project configuration. It points at their staging relay with a token file in `~/.config/awrel/`. Replace the endpoint and the token with those of your own relay.
+`.mcp.json` is the maintainers' own project configuration. It points at their staging relay with a token file in `~/.config/awrel/`. It launches a prebuilt binary at `~/.local/bin/awrel-0.7.1`, so install that release there or point `command` at your own build. Replace the endpoint and the token with those of your own relay.
 
 `wrangler.jsonc`, `.github/workflows/deploy.yml` and the deploy-check targets in `BUILD.bazel` hold the maintainers' deployment values: their Worker names and their domains. To run your own relay, see [Self-host a relay](docs/how-to/self-host.md).
