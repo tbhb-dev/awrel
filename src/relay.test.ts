@@ -904,6 +904,15 @@ it("cuts a close reason by character, not inside a surrogate pair", async () => 
   );
 });
 
+it("cuts an error message by character, not inside a surrogate pair", async () => {
+  const { lines } = await closing((instance, socket) => {
+    instance.webSocketError(socket, `${"x".repeat(63)}😀😀`);
+  });
+  expect(lines).toContain(
+    `relay error message="${"x".repeat(63)}😀" sockets=0`,
+  );
+});
+
 it("escapes the separators that JSON.stringify leaves in a log line", async () => {
   const { lines } = await closing((instance, socket) => {
     instance.webSocketClose(socket, 1001, "a\u0085b\u2028c\u2029d", true);
@@ -919,13 +928,17 @@ it("escapes the separators that JSON.stringify leaves in a log line", async () =
 
 it("logs the close of a connection made through the Worker", async () => {
   const client = await dial();
-  const lines = await logged(async () => {
+  const expected =
+    'relay close code=1001 clean=true reason="going away" sockets=0';
+  const spy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  try {
     client.socket.close(1001, "going away");
-    await settle();
-  });
-  expect(lines).toContain(
-    'relay close code=1001 clean=true reason="going away" sockets=0',
-  );
+    await vi.waitFor(() => {
+      expect(spy.mock.calls.map((call) => String(call[0]))).toContain(expected);
+    });
+  } finally {
+    spy.mockRestore();
+  }
 });
 
 it("ignores a close that throws on an already closed socket", async () => {

@@ -22,13 +22,30 @@ function eventFrame(
 }
 
 /**
+ * The first `count` code points of `text`. It stops reading after the last one,
+ * so a very long string costs no more than a short one.
+ */
+function firstCharacters(text: string, count: number): string {
+  let kept = "";
+  let taken = 0;
+  for (const character of text) {
+    if (taken === count) {
+      break;
+    }
+    kept += character;
+    taken += 1;
+  }
+  return kept;
+}
+
+/**
  * Quotes client-supplied text for a log line: cuts it to 64 characters
  * without splitting a surrogate pair, and escapes every character that a log
  * reader could treat as a line break. JSON.stringify escapes the control
  * characters but leaves U+0085, U+2028 and U+2029 as they are.
  */
 function quoted(text: string): string {
-  return JSON.stringify(Array.from(text).slice(0, 64).join("")).replace(
+  return JSON.stringify(firstCharacters(text, 64)).replace(
     /[\u0085\u2028\u2029]/g,
     (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
